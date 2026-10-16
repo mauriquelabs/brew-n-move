@@ -90,6 +90,24 @@ A local native run, after the iOS project has been generated:
 pnpm --filter mobile ios
 ```
 
+### TestFlight
+
+Development builds (`pnpm eas:build:ios`) cannot go to TestFlight. Use the production profile. Prerequisites: Apple Developer Program, an App Store Connect app for `com.brewandmove.app`, HealthKit enabled on that App ID, Expo login for this project, and `EXPO_PUBLIC_SUPABASE_URL` plus `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set as EAS environment variables for the **production** environment on [expo.dev](https://expo.dev) (not only in `apps/mobile/.env`).
+
+```bash
+pnpm eas:whoami
+pnpm eas:build:ios:production
+pnpm eas:submit:ios
+```
+
+Or build and submit in one step:
+
+```bash
+pnpm eas:build:ios:testflight
+```
+
+The first submit prompts for Apple ID or an App Store Connect API key. After Apple processes the binary (often 10–15 minutes), the build appears under TestFlight in App Store Connect. Add internal testers there. Optional: set `submit.production.ios.ascAppId` in `apps/mobile/eas.json` to the numeric App Store Connect Apple ID (App Information) for non-interactive submits.
+
 ### Physical Android
 
 Install Health Connect, enable USB debugging, connect the phone, then:

@@ -1,10 +1,24 @@
 {
+  "cli": {
+    "appVersionSource": "remote"
+  },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
       "corepack": true,
       "pnpm": "10.26.2"
+    },
+    "production": {
+      "autoIncrement": true,
+      "environment": "production",
+      "corepack": true,
+      "pnpm": "10.26.2"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {}
     }
   }
 }
