@@ -94,8 +94,12 @@ pnpm --filter mobile ios
 
 Development builds (`pnpm eas:build:ios`) cannot go to TestFlight. Use the production profile. Prerequisites: Apple Developer Program, an App Store Connect app for `com.brewandmove.app`, HealthKit enabled on that App ID, Expo login for this project, and `EXPO_PUBLIC_SUPABASE_URL` plus `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set as EAS environment variables for the **production** environment on [expo.dev](https://expo.dev) (not only in `apps/mobile/.env`).
 
+Use visibility **Plain text** or **Sensitive** for those `EXPO_PUBLIC_*` names — not **Secret**. Secret values are not available to the JS bundle, so a production build made without Plain text/Sensitive vars will crash on open when Supabase config is missing. After changing EAS env vars, rebuild and resubmit; the previous TestFlight binary does not pick them up.
+
 ```bash
+pnpm install
 pnpm eas:whoami
+pnpm dlx eas-cli@latest env:list --environment production   # from apps/mobile
 pnpm eas:build:ios:production
 pnpm eas:submit:ios
 ```
