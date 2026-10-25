@@ -110,7 +110,7 @@ If it is unclear whether a list should refresh, ask before shipping without it.
 - Under the image, show the business name, a short description, a favourite control, the full price, the discounted price, and the Brew Points cost. Favourites are not saved yet.
 - Show a collect time only when the offer has one. Most offers do not.
 - Omit ratings.
-- Show a recent-activity preview below the catalogue, with See all to the full Activity screen.
+- Open Activity from the quick action, not as an inline preview on BrewPoints.
 - Begin redemption from offer detail. The detail opens on the same wide image, then the business name and address, the optional collect time, About this offer, and Collection instructions. Keep the full price and discounted price in a footer with the redeem action.
 
 ### Discover

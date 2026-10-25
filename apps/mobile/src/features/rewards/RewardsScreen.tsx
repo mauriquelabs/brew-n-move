@@ -1,4 +1,4 @@
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Pressable,
@@ -24,15 +24,6 @@ import { floatingTabBarClearance } from '../../components/FloatingTabBar';
 import { PillButton } from '../../components/PillButton';
 import { useAuth } from '../auth/AuthProvider';
 import { useBalance } from '../earning/BalanceProvider';
-import { deviceTimeZone } from '../earning/localDay';
-import {
-  flattenRecentActivity,
-  formatAwardMeta,
-  formatRelativeActivityDay,
-  formatRowTime,
-  loadMemberActivity,
-  type ActivityRow,
-} from '../today/activity';
 import { motionSprings } from '../../motion/presets';
 import { colors, fonts, radii, spacing } from '../../theme/tokens';
 import { formatNumber } from '../../utils/format';
@@ -42,7 +33,6 @@ import { OfferPrice } from './OfferPrice';
 import { loadOffers, type Offer } from './offers';
 
 const cardImageHeight = 168;
-const recentActivityLimit = 3;
 
 type RewardCardProps = Readonly<{
   offer: Offer;
@@ -184,62 +174,16 @@ function QuickActionIcon({ name }: Readonly<{ name: 'rewards' | 'vouchers' | 'ac
   );
 }
 
-function ActivityPreviewRow({ row }: Readonly<{ row: ActivityRow }>) {
-  const timeZone = row.timezone || deviceTimeZone();
-  const dayLabel = formatRelativeActivityDay(row.localDate, timeZone);
-  const timeLabel = formatRowTime(row.occurredAt, timeZone);
-
-  return (
-    <View style={styles.activityRow}>
-      <View style={styles.rowIcon}>
-        <View style={styles.rowIconStem} />
-        <View style={styles.rowIconCup} />
-      </View>
-      {row.kind === 'award' ? (
-        <>
-          <View style={styles.rowCopy}>
-            <AppText role="action">Steps validated</AppText>
-            <AppText role="caption" style={styles.rowMeta}>
-              {`${dayLabel} · ${formatAwardMeta(row)}`}
-            </AppText>
-          </View>
-          <AppText
-            role="action"
-            style={[styles.rowPointsEarned, row.points === 0 && styles.rowPointsMuted]}
-          >
-            {`+${formatNumber(row.points)}`}
-          </AppText>
-        </>
-      ) : (
-        <>
-          <View style={styles.rowCopy}>
-            <AppText role="action">{row.title}</AppText>
-            <AppText role="caption" style={styles.rowMeta}>
-              {`${dayLabel} · ${timeLabel} · ${row.partnerName}`}
-            </AppText>
-          </View>
-          <AppText role="action" style={styles.rowPointsSpent}>
-            {`−${formatNumber(row.points)}`}
-          </AppText>
-        </>
-      )}
-    </View>
-  );
-}
-
 export function RewardsScreen() {
   const insets = useSafeAreaInsets();
-  const { beginAccountAction, profileStatus, sessionStatus, userId } = useAuth();
+  const { beginAccountAction, profileStatus, sessionStatus } = useAuth();
   const { balance, reloadBalance } = useBalance();
   const [offers, setOffers] = useState<Offer[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [recentRows, setRecentRows] = useState<ActivityRow[] | null>(null);
-  const [activityFailed, setActivityFailed] = useState(false);
   const hasOffers = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   const rewardsOffset = useRef(0);
-  const ready = sessionStatus === 'signedIn' && profileStatus === 'ready';
 
   const loadCatalogue = useCallback(async () => {
     const next = await loadOffers();
@@ -255,40 +199,18 @@ export function RewardsScreen() {
     setOffers(next);
   }, []);
 
-  const loadActivity = useCallback(async () => {
-    if (!userId || !ready) {
-      setRecentRows([]);
-      setActivityFailed(false);
-      return;
-    }
-
-    const result = await loadMemberActivity(userId);
-    if (!result.ok) {
-      setActivityFailed(true);
-      setRecentRows([]);
-      return;
-    }
-
-    setActivityFailed(false);
-    setRecentRows(flattenRecentActivity(result.groups, recentActivityLimit));
-  }, [ready, userId]);
-
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await Promise.all([loadCatalogue(), loadActivity(), reloadBalance()]);
+      await Promise.all([loadCatalogue(), reloadBalance()]);
     } finally {
       setRefreshing(false);
     }
-  }, [loadActivity, loadCatalogue, reloadBalance]);
+  }, [loadCatalogue, reloadBalance]);
 
   useEffect(() => {
     void loadCatalogue();
   }, [loadCatalogue]);
-
-  useFocusEffect(useCallback(() => {
-    void loadActivity();
-  }, [loadActivity]));
 
   const onRewardsLayout = (event: LayoutChangeEvent) => {
     rewardsOffset.current = event.nativeEvent.layout.y;
@@ -400,57 +322,6 @@ export function RewardsScreen() {
             <View style={styles.list}>
               {(offers ?? []).map((offer) => (
                 <RewardCard key={offer.id} offer={offer} />
-              ))}
-            </View>
-          )}
-        </View>
-
-        <View style={styles.activitySection}>
-          <View style={styles.activityHeader}>
-            <AppText role="eyebrow" style={styles.sectionLabel}>
-              Recent activity
-            </AppText>
-            <Pressable accessibilityRole="button" hitSlop={8} onPress={openActivity}>
-              <AppText role="action" style={styles.seeAll}>
-                See all
-              </AppText>
-            </Pressable>
-          </View>
-
-          {!ready ? (
-            <View style={styles.activityEmpty}>
-              <AppText role="heading">Sign in to see activity</AppText>
-              <AppText role="caption" style={styles.retryCopy}>
-                Validations and redemptions will show up here.
-              </AppText>
-              <PillButton
-                appearance="primary"
-                label="Sign in"
-                onPress={() => beginAccountAction({ type: 'activity' })}
-              />
-            </View>
-          ) : activityFailed ? (
-            <View style={styles.activityEmpty}>
-              <AppText role="caption" style={styles.retryCopy}>
-                Activity could not be loaded.
-              </AppText>
-              <PillButton appearance="primary" label="Try again" onPress={() => { void loadActivity(); }} />
-            </View>
-          ) : recentRows == null ? (
-            <AppText role="caption" style={styles.retryCopy}>
-              Loading activity
-            </AppText>
-          ) : recentRows.length === 0 ? (
-            <View style={styles.activityEmpty}>
-              <AppText role="heading">No activity yet</AppText>
-              <AppText role="caption" style={styles.retryCopy}>
-                Validations and redemptions will show up here.
-              </AppText>
-            </View>
-          ) : (
-            <View style={styles.activityList}>
-              {recentRows.map((row) => (
-                <ActivityPreviewRow key={`${row.kind}-${row.id}`} row={row} />
               ))}
             </View>
           )}
@@ -579,70 +450,5 @@ const styles = StyleSheet.create({
     color: colors.muted,
     flex: 1,
     paddingBottom: 2,
-  },
-  activitySection: {
-    marginTop: spacing.md,
-  },
-  activityHeader: {
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  seeAll: {
-    color: colors.moss,
-  },
-  activityList: {
-    marginTop: spacing.md,
-  },
-  activityEmpty: {
-    gap: spacing.md,
-    marginTop: spacing.md,
-  },
-  activityRow: {
-    alignItems: 'center',
-    backgroundColor: colors.card,
-    borderColor: colors.line,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  rowIcon: {
-    alignItems: 'center',
-    height: 28,
-    justifyContent: 'flex-end',
-    width: 22,
-  },
-  rowIconStem: {
-    backgroundColor: colors.moss,
-    borderRadius: radii.pill,
-    height: 10,
-    width: 3,
-  },
-  rowIconCup: {
-    backgroundColor: colors.brass,
-    borderRadius: 8,
-    height: 10,
-    marginTop: 2,
-    width: 16,
-  },
-  rowCopy: {
-    flex: 1,
-  },
-  rowMeta: {
-    color: colors.muted,
-    marginTop: 2,
-  },
-  rowPointsEarned: {
-    color: colors.moss,
-  },
-  rowPointsSpent: {
-    color: colors.ink,
-  },
-  rowPointsMuted: {
-    color: colors.muted,
   },
 });

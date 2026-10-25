@@ -57,21 +57,6 @@ export function formatAwardMeta(row: AwardRow) {
   return `${time} · ${formatNumber(row.stepTotal)} steps`;
 }
 
-export function formatRelativeActivityDay(localDate: string, timeZone: string) {
-  const today = localDateInTimeZone(new Date(), timeZone);
-  if (localDate === today) {
-    return 'Today';
-  }
-
-  const yesterdayDate = new Date();
-  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
-  if (localDate === localDateInTimeZone(yesterdayDate, timeZone)) {
-    return 'Yesterday';
-  }
-
-  return formatDayHeading(localDate);
-}
-
 export function groupByDay(rows: ActivityRow[]) {
   const groups = new Map<string, ActivityRow[]>();
   for (const row of rows) {
@@ -86,20 +71,6 @@ export function groupByDay(rows: ActivityRow[]) {
       date,
       rows: items.sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)),
     })) satisfies DayGroup[];
-}
-
-export function flattenRecentActivity(groups: DayGroup[], limit: number) {
-  const rows: ActivityRow[] = [];
-  for (const group of groups) {
-    for (const row of group.rows) {
-      rows.push(row);
-      if (rows.length >= limit) {
-        return rows;
-      }
-    }
-  }
-
-  return rows;
 }
 
 export async function loadMemberActivity(userId: string): Promise<
