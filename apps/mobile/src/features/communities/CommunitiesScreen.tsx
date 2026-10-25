@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { AppText } from '../../components/AppText';
-import { floatingTabBarClearance } from '../../components/FloatingTabBar';
 import { PillButton } from '../../components/PillButton';
+import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { colors, radii, spacing } from '../../theme/tokens';
 import { useAuth } from '../auth/AuthProvider';
 import {
@@ -81,7 +81,6 @@ function ChevronDown() {
 }
 
 export function CommunitiesScreen() {
-  const insets = useSafeAreaInsets();
   const { beginAccountAction, profileStatus, sessionStatus, userId } = useAuth();
   const accountReady = sessionStatus === 'signedIn' && profileStatus === 'ready';
   const [catalog, setCatalog] = useState(communities);
@@ -125,13 +124,16 @@ export function CommunitiesScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <SafeAreaView edges={['top']} style={styles.screen}>
+      <View style={styles.topBar}>
+        <ScreenBackButton accessibilityLabel="Back" />
+        <AppText accessibilityRole="header" role="title" style={styles.topTitle}>
+          Communities
+        </AppText>
+      </View>
       <ScrollView
         alwaysBounceVertical
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: floatingTabBarClearance(insets.bottom) },
-        ]}
+        contentContainerStyle={styles.content}
         refreshControl={
           <RefreshControl
             colors={[colors.moss]}
@@ -254,7 +256,7 @@ export function CommunitiesScreen() {
           </SafeAreaView>
         </View>
       </Modal>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -263,7 +265,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.field,
     flex: 1,
   },
+  topBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+  },
+  topTitle: {
+    color: colors.ink,
+    flex: 1,
+  },
   content: {
+    paddingBottom: spacing.xxl,
     paddingHorizontal: spacing.lg,
   },
   intro: {

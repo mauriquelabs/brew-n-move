@@ -8,6 +8,9 @@ import { TabIcon, type TabIconName } from './TabIcon';
 
 export const FLOATING_TAB_BAR_HEIGHT = 64;
 
+/** Only these file-based routes belong in the floating capsule. */
+const TAB_ROUTES = new Set(['index', 'rewards', 'discover']);
+
 export function floatingTabBarClearance(bottomInset: number) {
   return FLOATING_TAB_BAR_HEIGHT + Math.max(bottomInset, spacing.sm) + spacing.md;
 }
@@ -26,6 +29,7 @@ function iconForRoute(routeName: string): TabIconName {
 
 export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  const tabs = state.routes.filter((route) => TAB_ROUTES.has(route.name));
 
   return (
     <View
@@ -33,12 +37,9 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
       style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}
     >
       <View accessibilityRole="tablist" style={styles.capsule}>
-        {state.routes.map((route, index) => {
+        {tabs.map((route) => {
+          const index = state.routes.findIndex((candidate) => candidate.key === route.key);
           const { options } = descriptors[route.key];
-          if ((options as { href?: string | null }).href === null) {
-            return null;
-          }
-
           const focused = state.index === index;
           const label =
             typeof options.tabBarLabel === 'string'
@@ -46,7 +47,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
               : typeof options.title === 'string'
                 ? options.title
                 : route.name;
-          const color = focused ? colors.moss : colors.muted;
+          const color = focused ? colors.ink : colors.muted;
           const iconName = iconForRoute(route.name);
 
           const onPress = () => {
@@ -80,6 +81,7 @@ export function FloatingTabBar({ state, descriptors, navigation }: BottomTabBarP
             >
               <TabIcon color={color} focused={focused} name={iconName} />
               <AppText
+                numberOfLines={1}
                 role="caption"
                 style={[
                   styles.label,
@@ -107,6 +109,7 @@ const styles = StyleSheet.create({
   },
   capsule: {
     alignItems: 'center',
+    alignSelf: 'center',
     backgroundColor: colors.card,
     borderColor: colors.line,
     borderRadius: radii.pill,
@@ -114,22 +117,23 @@ const styles = StyleSheet.create({
     elevation: 6,
     flexDirection: 'row',
     height: FLOATING_TAB_BAR_HEIGHT,
-    justifyContent: 'space-between',
+    maxWidth: 360,
     paddingHorizontal: spacing.xs,
     shadowColor: colors.ink,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
     shadowRadius: 12,
+    width: '100%',
   },
   item: {
     alignItems: 'center',
     borderRadius: radii.pill,
     flex: 1,
     gap: 2,
-    height: FLOATING_TAB_BAR_HEIGHT - 8,
+    height: FLOATING_TAB_BAR_HEIGHT - 10,
     justifyContent: 'center',
-    minWidth: 44,
-    paddingHorizontal: spacing.xs,
+    minWidth: 0,
+    paddingHorizontal: 4,
   },
   itemFocused: {
     backgroundColor: colors.mossSoft,
@@ -137,5 +141,6 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 11,
     lineHeight: 13,
+    textAlign: 'center',
   },
 });

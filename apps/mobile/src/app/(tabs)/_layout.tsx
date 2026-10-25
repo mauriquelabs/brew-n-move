@@ -58,20 +58,6 @@ export default function TabLayout() {
           title: 'Discover',
         }}
       />
-      <Tabs.Screen
-        name="communities"
-        options={{
-          header: () => <MemberHeader title="Communities" />,
-          href: null,
-          title: 'Communities',
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          href: null,
-        }}
-      />
     </Tabs>
   );
 }

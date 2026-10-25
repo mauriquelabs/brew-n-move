@@ -102,7 +102,7 @@ function routeForIntent(intent: AccountIntent) {
   }
 
   if (intent?.type === 'join') {
-    return '/(tabs)/communities' as const;
+    return '/communities' as const;
   }
 
   if (intent?.type === 'activity') {
