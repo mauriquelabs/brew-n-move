@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Modal, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { AppText } from '../../components/AppText';
-import { useAuth } from '../auth/AuthProvider';
+import { floatingTabBarClearance } from '../../components/FloatingTabBar';
 import { PillButton } from '../../components/PillButton';
 import { colors, radii, spacing } from '../../theme/tokens';
+import { useAuth } from '../auth/AuthProvider';
 import {
   CommunityIllustration,
   CommunityIllustrationKind,
@@ -80,6 +81,7 @@ function ChevronDown() {
 }
 
 export function CommunitiesScreen() {
+  const insets = useSafeAreaInsets();
   const { beginAccountAction, profileStatus, sessionStatus, userId } = useAuth();
   const accountReady = sessionStatus === 'signedIn' && profileStatus === 'ready';
   const [catalog, setCatalog] = useState(communities);
@@ -126,7 +128,10 @@ export function CommunitiesScreen() {
     <View style={styles.screen}>
       <ScrollView
         alwaysBounceVertical
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: floatingTabBarClearance(insets.bottom) },
+        ]}
         refreshControl={
           <RefreshControl
             colors={[colors.moss]}
@@ -259,7 +264,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingBottom: spacing.xxl,
     paddingHorizontal: spacing.lg,
   },
   intro: {

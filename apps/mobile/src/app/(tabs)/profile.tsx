@@ -1,5 +1,6 @@
-import { ProfileScreen } from '../../features/profile/ProfileScreen';
+import { Redirect } from 'expo-router';
 
-export default function ProfileRoute() {
-  return <ProfileScreen />;
+/** Kept so older tab routes resolve; Profile lives on the root stack. */
+export default function ProfileTabRedirect() {
+  return <Redirect href="/profile" />;
 }

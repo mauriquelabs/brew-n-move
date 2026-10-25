@@ -10,9 +10,11 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { scheduleOnRN } from 'react-native-worklets';
 
 import { AppText } from '../../components/AppText';
+import { floatingTabBarClearance } from '../../components/FloatingTabBar';
 import { PillButton } from '../../components/PillButton';
 import {
   dailyPointCap,
@@ -109,6 +111,7 @@ function validationCopy(phase: ReturnType<typeof useTodayValidation>['phase'], o
 }
 
 export function TodayScreen() {
+  const insets = useSafeAreaInsets();
   const { connect, loading, refresh, status, steps } = useHealth();
   const { awardedToday, overlapsAnother, phase, resetKey, validate } = useTodayValidation();
   const connected = status === 'granted';
@@ -235,7 +238,13 @@ export function TodayScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: floatingTabBarClearance(insets.bottom) },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         {connected ? (
           <>
             <View style={styles.hero}>
@@ -338,7 +347,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingBottom: spacing.xxl,
     paddingHorizontal: spacing.lg,
   },
   hero: {

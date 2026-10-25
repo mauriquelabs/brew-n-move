@@ -109,7 +109,7 @@ function routeForIntent(intent: AccountIntent) {
     return '/validations' as const;
   }
 
-  return '/(tabs)/profile' as const;
+  return '/profile' as const;
 }
 
 function isGuestAccountPath(pathname: string) {

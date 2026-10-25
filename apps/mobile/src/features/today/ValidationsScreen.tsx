@@ -8,82 +8,16 @@ import { AppText } from '../../components/AppText';
 import { PillButton } from '../../components/PillButton';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { useAuth } from '../auth/AuthProvider';
-import { supabase } from '../auth/supabase';
 import { useBalance } from '../earning/BalanceProvider';
-import { deviceTimeZone, localDateInTimeZone } from '../earning/localDay';
 import { colors, radii, spacing } from '../../theme/tokens';
 import { formatNumber } from '../../utils/format';
-
-type AwardRow = {
-  kind: 'award';
-  id: string;
-  localDate: string;
-  occurredAt: string;
-  points: number;
-  stepTotal: number | null;
-  timezone: string;
-};
-
-type RedeemRow = {
-  kind: 'redeem';
-  id: string;
-  localDate: string;
-  occurredAt: string;
-  partnerName: string;
-  points: number;
-  timezone: string;
-  title: string;
-};
-
-type ActivityRow = AwardRow | RedeemRow;
-
-type DayGroup = {
-  date: string;
-  rows: ActivityRow[];
-};
-
-function formatDayHeading(localDate: string) {
-  const [year, month, day] = localDate.split('-').map(Number);
-  return new Intl.DateTimeFormat('en-IE', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(new Date(year, month - 1, day));
-}
-
-function formatRowTime(iso: string, timeZone: string) {
-  return new Intl.DateTimeFormat('en-IE', {
-    hour: '2-digit',
-    hourCycle: 'h23',
-    minute: '2-digit',
-    timeZone,
-  }).format(new Date(iso));
-}
-
-function formatAwardMeta(row: AwardRow) {
-  const time = formatRowTime(row.occurredAt, row.timezone);
-  if (row.stepTotal == null) {
-    return time;
-  }
-
-  return `${time} · ${formatNumber(row.stepTotal)} steps`;
-}
-
-function groupByDay(rows: ActivityRow[]) {
-  const groups = new Map<string, ActivityRow[]>();
-  for (const row of rows) {
-    const current = groups.get(row.localDate) ?? [];
-    current.push(row);
-    groups.set(row.localDate, current);
-  }
-
-  return [...groups.entries()]
-    .sort(([left], [right]) => right.localeCompare(left))
-    .map(([date, items]) => ({
-      date,
-      rows: items.sort((left, right) => right.occurredAt.localeCompare(left.occurredAt)),
-    })) satisfies DayGroup[];
-}
+import {
+  formatAwardMeta,
+  formatDayHeading,
+  formatRowTime,
+  loadMemberActivity,
+  type DayGroup,
+} from './activity';
 
 export function ValidationsScreen() {
   const { beginAccountAction, profileStatus, sessionStatus, userId } = useAuth();
@@ -100,48 +34,15 @@ export function ValidationsScreen() {
       return;
     }
 
-    const timeZone = deviceTimeZone();
-    const [awards, redemptions] = await Promise.all([
-      supabase
-        .from('step_validations')
-        .select('awarded_points, id, local_date, step_total, timezone, validated_at')
-        .eq('member_id', userId),
-      supabase
-        .from('redemptions')
-        .select('id, offer_title, partner_name, points_spent, redeemed_at')
-        .eq('member_id', userId),
-    ]);
-
-    if (awards.error || !awards.data || redemptions.error || !redemptions.data) {
+    const result = await loadMemberActivity(userId);
+    if (!result.ok) {
       setFailed(true);
       setGroups([]);
       return;
     }
 
-    const rows: ActivityRow[] = [
-      ...awards.data.map((row) => ({
-        kind: 'award' as const,
-        id: row.id,
-        localDate: row.local_date,
-        occurredAt: row.validated_at,
-        points: row.awarded_points,
-        stepTotal: row.step_total,
-        timezone: row.timezone,
-      })),
-      ...redemptions.data.map((row) => ({
-        kind: 'redeem' as const,
-        id: row.id,
-        localDate: localDateInTimeZone(new Date(row.redeemed_at), timeZone),
-        occurredAt: row.redeemed_at,
-        partnerName: row.partner_name,
-        points: row.points_spent,
-        timezone: timeZone,
-        title: row.offer_title,
-      })),
-    ];
-
     setFailed(false);
-    setGroups(groupByDay(rows));
+    setGroups(result.groups);
   }, [ready, userId]);
 
   const refresh = useCallback(async () => {
@@ -175,7 +76,7 @@ export function ValidationsScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        <ScreenBackButton accessibilityLabel="Back to Today" />
+        <ScreenBackButton accessibilityLabel="Back" />
         <AppText accessibilityRole="header" role="title" style={styles.title}>
           Activity
         </AppText>

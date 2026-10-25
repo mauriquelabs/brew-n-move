@@ -14,7 +14,7 @@ Design a lively café rewards product with clear hierarchy and restrained playfu
 3. Use colour to communicate state: earned, selected, blocked, or redeemed.
 4. Put one idea in each card. Use generous radii, quiet borders, and deliberate spacing.
 5. Show Brew Points as the product language. Keep wallet, SOL, transaction, and chain terms out of member UI.
-6. Preserve the four tabs in order: Home, Rewards, Communities, Profile. Keep Map within Rewards.
+6. Preserve the three floating tabs in order: Home, BrewPoints, Discover. Profile opens from the gold B stamp. Keep Map within BrewPoints when present.
 
 ## Identity
 
@@ -58,7 +58,7 @@ Keep text measurements local when they belong to a composition rather than a reu
 - Keep visual appearance separate from semantic state. Set appearance explicitly; `selected` exists for accessibility and does not choose a colour.
 - Use clear labels and an icon where it clarifies state. Never communicate state or danger through colour alone.
 
-The signature is a compact circular brew stamp paired with the member's Brew Points balance in the header.
+The signature is a compact circular gold B stamp in the shared header that opens Profile. Show the Brew Points balance prominently on the BrewPoints tab.
 
 The visual motif is a walking trail that curls into coffee steam. Use it for progress paths, café illustrations, and small transitions. Do not scatter it as decoration.
 
@@ -87,8 +87,8 @@ If it is unclear whether a list should refresh, ask before shipping without it.
 
 ### Today
 
-- Show the points stamp in the header. Tapping it opens validation history.
-- Activity lists each validation’s added points, time, and step total. A later validation on the same day is another row. It also lists each redemption’s offer, time, partner, and points spent. Pull down to refresh the list and the balance.
+- Show the gold B stamp in the header. Tapping it opens Profile.
+- Activity lives under BrewPoints and the full Activity screen. It lists each validation’s added points, time, and step total. A later validation on the same day is another row. It also lists each redemption’s offer, time, partner, and points spent. Pull down to refresh the list and the balance.
 - Make today's verified steps the dominant number.
 - Keep the provisional milestone ladder in data. Draw every rung on a horizontal track the member can scroll, with steps and points on each stop.
 - Name the next meaningful milestone and state the remaining steps.
@@ -98,8 +98,10 @@ If it is unclear whether a list should refresh, ask before shipping without it.
 - Below a paying rung, hide the swipe. In its place, show a short caption that names the remaining steps and the Brew Points at the next milestone.
 - After a confirmed award, take over the screen once: the awarded points, a line about the next rung, and Continue.
 
-### Rewards
+### BrewPoints
 
+- Lead with a large Brew Points balance and the gold B stamp.
+- Provide compact quick actions for Rewards (scroll), My vouchers, and Activity.
 - Show every standard offer without requesting location permission.
 - Do not call the list “Nearby.”
 - Omit distance until location permission has already been granted.
@@ -108,7 +110,12 @@ If it is unclear whether a list should refresh, ask before shipping without it.
 - Under the image, show the business name, a short description, a favourite control, the full price, the discounted price, and the Brew Points cost. Favourites are not saved yet.
 - Show a collect time only when the offer has one. Most offers do not.
 - Omit ratings.
+- Show a recent-activity preview below the catalogue, with See all to the full Activity screen.
 - Begin redemption from offer detail. The detail opens on the same wide image, then the business name and address, the optional collect time, About this offer, and Collection instructions. Keep the full price and discounted price in a footer with the redeem action.
+
+### Discover
+
+- Keep a minimal coming-soon empty state. Do not invent partners, events, search, maps, or subscriptions.
 
 ### Communities
 
