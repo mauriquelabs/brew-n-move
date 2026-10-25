@@ -110,6 +110,43 @@ function validationCopy(phase: ReturnType<typeof useTodayValidation>['phase'], o
   return null;
 }
 
+/**
+ * Subtle status when the swipe is hidden. Never claims a successful validation
+ * unless the server has recorded an award for today.
+ */
+function idleValidationStatus(input: {
+  awardedToday: number | null;
+  dayBlocked: boolean;
+  steps: number;
+}): string | null {
+  if (input.dayBlocked) {
+    return null;
+  }
+
+  if (input.awardedToday == null) {
+    return 'Checking today’s validation…';
+  }
+
+  if (remainingClaim(input.steps, input.awardedToday) > 0) {
+    return null;
+  }
+
+  if (pointsForSteps(input.steps) === 0) {
+    const firstMilestone = getNextMilestone(0);
+    if (!firstMilestone) {
+      return null;
+    }
+
+    return `Reach ${formatNumber(firstMilestone.steps)} steps to unlock Brew Points.`;
+  }
+
+  if (input.awardedToday > 0) {
+    return 'Validation is up to date.';
+  }
+
+  return null;
+}
+
 export function TodayScreen() {
   const insets = useSafeAreaInsets();
   const { connect, loading, refresh, status, steps } = useHealth();
@@ -225,16 +262,20 @@ export function TodayScreen() {
     overlapsAnother || phase.kind === 'day_closed' || phase.kind === 'day_overlap';
   const claimReady =
     awardedToday != null && remainingClaim(steps, awardedToday) > 0 && !dayBlocked;
-  const awaitingRetry = phase.kind === 'rejected' || phase.kind === 'unconfirmed';
+  // Only show the swipe when something is claimable (or a submit is in flight).
+  // Do not leave a disabled swipe on screen when nothing can be claimed.
   const showSwipe =
-    phase.kind === 'submitting' || ((claimReady || awaitingRetry) && !dayBlocked);
+    phase.kind === 'submitting' || (claimReady && !dayBlocked);
   const nextPayable = getNextMilestone(steps);
+  const idleStatus = idleValidationStatus({ awardedToday, dayBlocked, steps });
   const showMilestoneNudge =
     !showSwipe
     && nextMilestone != null
     && nextPayable != null
     && !dayBlocked
-    && (awardedToday != null || remainingClaim(steps, 0) === 0);
+    && awardedToday != null
+    && pointsForSteps(steps) > 0
+    && remainingClaim(steps, awardedToday) === 0;
 
   return (
     <View style={styles.screen}>
@@ -309,6 +350,11 @@ export function TodayScreen() {
                 }}
                 resetKey={resetKey}
               />
+            ) : null}
+            {!showSwipe && idleStatus ? (
+              <AppText role="caption" style={styles.idleStatus}>
+                {idleStatus}
+              </AppText>
             ) : null}
             {showMilestoneNudge && nextMilestone ? (
               <AppText role="caption" style={styles.reachCopy}>
@@ -432,9 +478,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     paddingHorizontal: spacing.sm,
   },
-  reachCopy: {
+  idleStatus: {
     color: colors.muted,
     marginTop: spacing.md,
+    textAlign: 'center',
+  },
+  reachCopy: {
+    color: colors.muted,
+    marginTop: spacing.sm,
     textAlign: 'center',
   },
   statusCopy: {

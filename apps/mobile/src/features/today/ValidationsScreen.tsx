@@ -3,6 +3,7 @@ import { RefreshControl, StyleSheet, View } from 'react-native';
 import { ScrollView } from 'react-native-gesture-handler';
 import { useFocusEffect } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path, Rect } from 'react-native-svg';
 
 import { AppText } from '../../components/AppText';
 import { PillButton } from '../../components/PillButton';
@@ -16,8 +17,86 @@ import {
   formatDayHeading,
   formatRowTime,
   loadMemberActivity,
+  type ActivityRow,
   type DayGroup,
 } from './activity';
+
+function FootprintsIcon({ color }: Readonly<{ color: string }>) {
+  return (
+    <Svg height={20} viewBox="0 0 24 24" width={20}>
+      <Path
+        d="M7.2 4.8c1.4-.2 2.6 1.1 2.3 2.6-.4 1.8-2.2 3.1-2.8 4.8-.4 1.1.2 2.3 1.3 2.6"
+        fill="none"
+        stroke={color}
+        strokeLinecap="round"
+        strokeWidth={1.8}
+      />
+      <Path
+        d="M5.4 7.1c-.7.1-1.2.8-1 1.5M9.8 6.4c.7 0 1.2.6 1.1 1.3"
+        fill="none"
+        stroke={color}
+        strokeLinecap="round"
+        strokeWidth={1.6}
+      />
+      <Path
+        d="M15.4 5.6c1.4-.3 2.7 1 2.5 2.5-.3 1.9-2 3.3-2.4 5-.3 1.2.4 2.3 1.5 2.5"
+        fill="none"
+        stroke={color}
+        strokeLinecap="round"
+        strokeWidth={1.8}
+      />
+      <Path
+        d="M13.7 8c-.7.2-1.1.9-.9 1.5M18.1 7.1c.7 0 1.2.6 1.1 1.3"
+        fill="none"
+        stroke={color}
+        strokeLinecap="round"
+        strokeWidth={1.6}
+      />
+    </Svg>
+  );
+}
+
+function TicketIcon({ color }: Readonly<{ color: string }>) {
+  return (
+    <Svg height={20} viewBox="0 0 24 24" width={20}>
+      <Path
+        d="M4.5 8.2c0-.9.7-1.7 1.7-1.7h11.6c.9 0 1.7.8 1.7 1.7v2.1a1.7 1.7 0 0 0 0 3.4v2.1c0 .9-.8 1.7-1.7 1.7H6.2c-1 0-1.7-.8-1.7-1.7v-2.1a1.7 1.7 0 0 0 0-3.4z"
+        fill="none"
+        stroke={color}
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+      />
+      <Path
+        d="M10 7.5v9"
+        fill="none"
+        stroke={color}
+        strokeDasharray="2 2.5"
+        strokeLinecap="round"
+        strokeWidth={1.6}
+      />
+      <Rect fill={color} height="1.8" rx="0.9" width="4" x="13.2" y="10.2" />
+      <Rect fill={color} height="1.8" rx="0.9" width="4" x="13.2" y="13.2" />
+    </Svg>
+  );
+}
+
+function ActivityTypeIcon({ kind }: Readonly<{ kind: ActivityRow['kind'] }>) {
+  const award = kind === 'award';
+
+  return (
+    <View
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[styles.iconBadge, award ? styles.iconBadgeAward : styles.iconBadgeRedeem]}
+    >
+      {award ? (
+        <FootprintsIcon color={colors.moss} />
+      ) : (
+        <TicketIcon color={colors.brass} />
+      )}
+    </View>
+  );
+}
 
 export function ValidationsScreen() {
   const { beginAccountAction, profileStatus, sessionStatus, userId } = useAuth();
@@ -125,10 +204,7 @@ export function ValidationsScreen() {
               </AppText>
               {group.rows.map((row) => (
                 <View key={`${row.kind}-${row.id}`} style={styles.row}>
-                  <View style={styles.rowIcon}>
-                    <View style={styles.rowIconStem} />
-                    <View style={styles.rowIconCup} />
-                  </View>
+                  <ActivityTypeIcon kind={row.kind} />
                   {row.kind === 'award' ? (
                     <>
                       <View style={styles.rowCopy}>
@@ -220,24 +296,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
   },
-  rowIcon: {
+  iconBadge: {
     alignItems: 'center',
-    height: 28,
-    justifyContent: 'flex-end',
-    width: 22,
+    borderRadius: radii.sm,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
-  rowIconStem: {
-    backgroundColor: colors.moss,
-    borderRadius: radii.pill,
-    height: 10,
-    width: 3,
+  iconBadgeAward: {
+    backgroundColor: colors.mossSoft,
   },
-  rowIconCup: {
-    backgroundColor: colors.brass,
-    borderRadius: 8,
-    height: 10,
-    marginTop: 2,
-    width: 16,
+  iconBadgeRedeem: {
+    backgroundColor: colors.brassSoft,
   },
   rowCopy: {
     flex: 1,
@@ -250,7 +320,7 @@ const styles = StyleSheet.create({
     color: colors.moss,
   },
   rowPointsSpent: {
-    color: colors.ink,
+    color: colors.brass,
   },
   rowPointsMuted: {
     color: colors.muted,

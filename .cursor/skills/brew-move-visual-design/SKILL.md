@@ -95,7 +95,8 @@ If it is unclear whether a list should refresh, ask before shipping without it.
 - Celebrate crossing a milestone without blocking the screen. Once the daily cap is reached, keep the cap message in the reached-milestone style: brass steam marks, a moss heading, and a caption that says to come back tomorrow. Do not say that extra steps still count.
 - Show the provisional 20,000-step daily cap. Extra steps past that cap do not raise today’s Brew Points.
 - When health access is granted and a reached rung would add Brew Points, make a swipe the one primary action and state that the local day closes at midnight. The track is moss. After the drag starts, a muted overlay at the same 0.72 opacity as a pressed pill grows from the left behind the brass stamp. At rest the overlay is hidden. Chevrons nudge right until the drag starts. Releasing early does not submit. The café redemption swipe stays on its own screen.
-- Below a paying rung, hide the swipe. In its place, show a short caption that names the remaining steps and the Brew Points at the next milestone.
+- Hide the swipe when nothing is claimable. Do not leave a disabled swipe. Show a subtle status instead: loading while awards are unknown, reach-the-first-milestone when below 2,500, and “Validation is up to date” only after the server has recorded an award with nothing left to claim. Never imply validation succeeded without a server record.
+- Below a paying rung that is already validated, keep a short caption that names the remaining steps and the Brew Points at the next milestone.
 - After a confirmed award, take over the screen once: the awarded points, a line about the next rung, and Continue.
 
 ### BrewPoints
