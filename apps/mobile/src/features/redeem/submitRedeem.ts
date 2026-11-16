@@ -96,7 +96,14 @@ function confirmationFrom(payload: Record<string, unknown>): RedeemConfirmation 
 
   const tillConfirmedAt = payload.tillConfirmedAt ?? payload.till_confirmed_at;
   const location = payload.location ?? payload.location_name;
-  const discountCode = optionalText(payload.discountCode ?? payload.discount_code);
+  // DB RPC uses `code`; admin Edge contract uses `discountCode` / `discount_code`.
+  const discountCode = optionalText(
+    payload.discountCode
+    ?? payload.discount_code
+    ?? payload.code
+    ?? payload.fulfillment_code
+    ?? payload.fulfillmentCode,
+  );
   const storeUrl = optionalText(payload.storeUrl ?? payload.store_url);
   const instructions = parseInstructions(payload.instructions);
 
@@ -117,6 +124,7 @@ function confirmationFrom(payload: Record<string, unknown>): RedeemConfirmation 
 }
 
 function mapRedemptionRow(row: {
+  fulfillment_code?: string | null;
   discount_code?: string | null;
   id: string;
   instructions?: string[] | string | null;
@@ -131,7 +139,7 @@ function mapRedemptionRow(row: {
   value_label: string;
 }): RedeemConfirmation {
   return {
-    discountCode: optionalText(row.discount_code),
+    discountCode: optionalText(row.fulfillment_code ?? row.discount_code),
     instructions: parseInstructions(row.instructions),
     location: optionalText(row.location_name),
     offerId: row.offer_id,
@@ -214,7 +222,7 @@ async function postRedeem(body: Record<string, unknown>): Promise<RedeemResponse
 export function lookupVoucher(redemptionId: string) {
   return supabase
     .from('redemptions')
-    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, discount_code, store_url, instructions')
+    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, fulfillment_code, store_url, instructions')
     .eq('id', redemptionId)
     .maybeSingle()
     .then(async ({ data, error }) => {
@@ -237,7 +245,7 @@ export function lookupVoucher(redemptionId: string) {
 export function listMyRewards() {
   return supabase
     .from('redemptions')
-    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, discount_code, store_url, instructions')
+    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, fulfillment_code, store_url, instructions')
     .order('redeemed_at', { ascending: false })
     .then(async ({ data, error }) => {
       if (!error && data) {
