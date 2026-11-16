@@ -154,6 +154,22 @@ Deno.serve(async (req) => {
   }
 
   const admin = createClient(supabaseUrl, serviceKey);
+
+  let useDiscountCode = payload.action === 'get-code';
+  if (payload.action === 'exchange' && payload.offerId) {
+    const offer = await admin
+      .from('offers')
+      .select('offer_type')
+      .eq('id', payload.offerId)
+      .maybeSingle();
+    if (offer.error) {
+      return json({ ok: false, reason: 'unavailable' }, 500);
+    }
+    if (offer.data?.offer_type === 'discount_code') {
+      useDiscountCode = true;
+    }
+  }
+
   const invoked = payload.action === 'till'
     ? await admin.rpc('confirm_till', {
       p_latitude: payload.latitude,
@@ -162,7 +178,7 @@ Deno.serve(async (req) => {
       p_redemption_id: payload.redemptionId,
       p_request_id: payload.requestId,
     })
-    : payload.action === 'get-code'
+    : useDiscountCode
       ? await admin.rpc('redeem_discount_code', {
         p_commit: payload.commit,
         p_member_id: userData.user.id,

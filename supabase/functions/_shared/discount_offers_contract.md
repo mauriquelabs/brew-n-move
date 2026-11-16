@@ -40,6 +40,14 @@ Admin Edge Functions (`admin-partners`, `admin-offers`) and redeem `get-code` de
 - Reasons: `eligible` | `redeemed` | `not_onboarded` | `offer_unavailable` | `sold_out` | `insufficient_balance` | `wrong_offer_type` | `invalid_payload`
 - Success fields include `discount_code`, `store_url`, `instructions`, `partner`, `title`, `value_label`, `points_spent`, `redeemed_at`, `redemption_id`, `balance`
 
+### Edge `redeem` routing
+
+- `action: "get-code"` → always `redeem_discount_code`
+- `action: "exchange"` → if offer `offer_type = discount_code`, same RPC (mobile Get code currently uses exchange); else café `exchange_offer`
+- `action: "till"` → café only; never for discount codes
+- Response camelCase aliases: `discountCode`, `storeUrl`, `instructions`, plus existing redemption fields
+- Prefer reason `redeemed` for a completed Get code (mobile also accepts `issued` if `discountCode` is present)
+
 ## Admin Edge (implemented; service-role table access)
 
 - `admin-partners` GET list / GET `?id=` / POST create|update
