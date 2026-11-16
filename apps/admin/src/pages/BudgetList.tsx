@@ -51,10 +51,12 @@ export function BudgetList({ onSession, session }: Props) {
       <header className="bar">
         <h1>Reward Budgets</h1>
         <div className="actions">
+          <Link to="/partners">Partners</Link>
           <Link to="/reward-budgets/new">New budget</Link>
           <button onClick={() => void signOut()} type="button">Sign out</button>
         </div>
       </header>
+      <p className="muted">Legacy vault tooling. Day-to-day offer work lives under Partners.</p>
       {error ? (
         <p className="error">
           {error}

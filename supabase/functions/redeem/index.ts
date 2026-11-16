@@ -2,8 +2,8 @@ import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
-// Exchange deducts Brew Points. Till confirm queues settlement after the response.
-// This function does not wait for a Solana transaction. Issuance rows stay blocked.
+// Café vouchers: exchange deducts points; till confirm queues settlement.
+// Discount codes: get-code deducts points and assigns one unique code. No till / vault.
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -14,6 +14,8 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 type RpcResult = {
   balance?: number;
+  discount_code?: string;
+  instructions?: string[];
   location?: string;
   offer_id?: string;
   ok?: boolean;
@@ -23,6 +25,7 @@ type RpcResult = {
   reason?: string;
   redeemed_at?: string;
   redemption_id?: string;
+  store_url?: string | null;
   till_confirmed_at?: string | null;
   title?: string;
   value_label?: string;
@@ -50,7 +53,13 @@ function payloadFrom(body: unknown) {
     return null;
   }
   const record = body as Record<string, unknown>;
-  const action = record.action === 'till' ? 'till' : record.action === 'exchange' ? 'exchange' : null;
+  const action = record.action === 'till'
+    ? 'till'
+    : record.action === 'exchange'
+      ? 'exchange'
+      : record.action === 'get-code'
+        ? 'get-code'
+        : null;
   const requestId = uuid(record.requestId);
   const commit = record.commit;
   if (action === 'till') {
@@ -61,6 +70,16 @@ function payloadFrom(body: unknown) {
       return null;
     }
     return { action, commit: true, latitude, longitude, offerId: null, redemptionId, requestId };
+  }
+  if (action === 'get-code') {
+    const offerId = uuid(record.offerId);
+    if (!offerId || typeof commit !== 'boolean') {
+      return null;
+    }
+    if (commit && !requestId) {
+      return null;
+    }
+    return { action, commit, latitude: null, longitude: null, offerId, redemptionId: null, requestId };
   }
   if (action !== 'exchange' || typeof commit !== 'boolean') {
     return null;
@@ -73,6 +92,27 @@ function payloadFrom(body: unknown) {
     return null;
   }
   return { action, commit, latitude: null, longitude: null, offerId, redemptionId: null, requestId };
+}
+
+function successBody(result: RpcResult, fallbackOfferId: string | null) {
+  return {
+    balance: result.balance ?? null,
+    discountCode: result.discount_code ?? null,
+    instructions: Array.isArray(result.instructions) ? result.instructions : null,
+    location: result.location ?? null,
+    offerId: result.offer_id ?? fallbackOfferId,
+    ok: true,
+    partner: result.partner ?? null,
+    pointsCost: result.points_cost ?? result.points_spent ?? null,
+    pointsSpent: result.points_spent ?? null,
+    reason: result.reason,
+    redeemedAt: result.redeemed_at ?? null,
+    redemptionId: result.redemption_id ?? null,
+    storeUrl: result.store_url ?? null,
+    tillConfirmedAt: result.till_confirmed_at ?? null,
+    title: result.title ?? null,
+    valueLabel: result.value_label ?? null,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -122,12 +162,19 @@ Deno.serve(async (req) => {
       p_redemption_id: payload.redemptionId,
       p_request_id: payload.requestId,
     })
-    : await admin.rpc('exchange_offer', {
-      p_commit: payload.commit,
-      p_member_id: userData.user.id,
-      p_offer_id: payload.offerId,
-      p_request_id: payload.requestId,
-    });
+    : payload.action === 'get-code'
+      ? await admin.rpc('redeem_discount_code', {
+        p_commit: payload.commit,
+        p_member_id: userData.user.id,
+        p_offer_id: payload.offerId,
+        p_request_id: payload.requestId,
+      })
+      : await admin.rpc('exchange_offer', {
+        p_commit: payload.commit,
+        p_member_id: userData.user.id,
+        p_offer_id: payload.offerId,
+        p_request_id: payload.requestId,
+      });
 
   if (invoked.error || !invoked.data) {
     return json({ ok: false, reason: 'unavailable' }, 500);
@@ -148,6 +195,7 @@ Deno.serve(async (req) => {
     || reason === 'insufficient_balance'
     || reason === 'budget_exhausted'
     || reason === 'not_found'
+    || reason === 'wrong_offer_type'
   ) {
     return json({
       balance: result.balance ?? null,
@@ -157,28 +205,15 @@ Deno.serve(async (req) => {
   }
 
   if (reason === 'eligible' || reason === 'issued') {
-    return json({
-      balance: result.balance ?? null,
-      location: result.location ?? null,
-      offerId: result.offer_id ?? payload.offerId,
-      ok: true,
-      partner: result.partner ?? null,
-      pointsCost: result.points_cost ?? result.points_spent ?? null,
-      pointsSpent: result.points_spent ?? null,
-      reason,
-      redeemedAt: result.redeemed_at ?? null,
-      redemptionId: result.redemption_id ?? null,
-      tillConfirmedAt: result.till_confirmed_at ?? null,
-      title: result.title ?? null,
-      valueLabel: result.value_label ?? null,
-    }, 200);
+    return json(successBody(result, payload.offerId), 200);
   }
 
   if (reason !== 'redeemed') {
     return json({ ok: false, reason: 'unavailable' }, 500);
   }
 
-  if (result.redemption_id) {
+  // Café till path only: queue vault settlement. Discount-code redeemals skip this.
+  if (payload.action === 'till' && result.redemption_id) {
     const redemptionId = result.redemption_id;
     EdgeRuntime.waitUntil(fetch(`${supabaseUrl}/functions/v1/settle-reward`, {
       body: JSON.stringify({ redemptionId }),
@@ -190,18 +225,5 @@ Deno.serve(async (req) => {
     }).catch(() => undefined));
   }
 
-  return json({
-    balance: result.balance ?? 0,
-    location: result.location ?? null,
-    offerId: result.offer_id ?? payload.offerId,
-    ok: true,
-    partner: result.partner ?? null,
-    pointsSpent: result.points_spent ?? null,
-    reason,
-    redeemedAt: result.redeemed_at ?? null,
-    redemptionId: result.redemption_id ?? null,
-    tillConfirmedAt: result.till_confirmed_at ?? null,
-    title: result.title ?? null,
-    valueLabel: result.value_label ?? null,
-  }, 200);
+  return json(successBody(result, payload.offerId), 200);
 });
