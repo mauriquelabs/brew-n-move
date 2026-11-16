@@ -1,7 +1,6 @@
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppText } from '../../components/AppText';
@@ -15,7 +14,17 @@ import {
 } from '../redeem/submitRedeem';
 
 function statusLabel(row: RedeemConfirmation) {
-  return row.tillConfirmedAt ? 'Collected' : 'Ready to collect';
+  return row.discountCode ? 'Code ready' : 'Reward';
+}
+
+function openReward(row: RedeemConfirmation) {
+  router.push({
+    pathname: '/offer',
+    params: {
+      id: row.offerId,
+      redemptionId: row.redemptionId,
+    },
+  });
 }
 
 export function MyRewardsScreen() {
@@ -77,7 +86,7 @@ export function MyRewardsScreen() {
       >
         <AppText accessibilityRole="header" role="title">My rewards</AppText>
         <AppText role="body" style={styles.intro}>
-          Open a reward at the café and swipe when staff can see this screen.
+          Reopen a discount code any time, then use it once at the partner store.
         </AppText>
         {failed ? (
           <View style={styles.retry}>
@@ -86,25 +95,29 @@ export function MyRewardsScreen() {
           </View>
         ) : null}
         {!signedIn ? (
-          <AppText role="body" style={styles.muted}>Sign in to see rewards you have used points on.</AppText>
+          <AppText role="body" style={styles.muted}>Sign in to see codes you have unlocked.</AppText>
         ) : null}
         <View style={styles.list}>
           {(rows ?? []).map((row) => (
             <Pressable
+              accessibilityHint="Opens this discount code"
               accessibilityRole="button"
               key={row.redemptionId}
-              onPress={() => router.push({ pathname: '/voucher/[id]', params: { id: row.redemptionId } })}
+              onPress={() => openReward(row)}
               style={styles.card}
             >
               <AppText role="eyebrow">{statusLabel(row)}</AppText>
               <AppText role="heading" style={styles.partner}>{row.partner}</AppText>
               <AppText role="body">{row.title}</AppText>
-              <AppText role="caption" style={styles.muted}>{row.location}</AppText>
+              <AppText role="caption" style={styles.muted}>{row.valueLabel}</AppText>
+              {row.discountCode ? (
+                <AppText role="action" style={styles.codePreview}>{row.discountCode}</AppText>
+              ) : null}
             </Pressable>
           ))}
         </View>
         {signedIn && rows?.length === 0 && !failed ? (
-          <AppText role="body" style={styles.muted}>No rewards yet. Use points from the Rewards list.</AppText>
+          <AppText role="body" style={styles.muted}>No codes yet. Get a code from the Rewards list.</AppText>
         ) : null}
       </ScrollView>
     </View>
@@ -146,6 +159,10 @@ const styles = StyleSheet.create({
   muted: {
     color: colors.muted,
     marginTop: 4,
+  },
+  codePreview: {
+    color: colors.moss,
+    marginTop: spacing.sm,
   },
   retry: {
     gap: spacing.md,

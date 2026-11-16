@@ -5,8 +5,8 @@ export type Offer = {
   id: string;
   slug: string;
   partner: string;
-  location: string;
-  address: string;
+  location: string | null;
+  address: string | null;
   title: string;
   description: string;
   value: string;
@@ -15,14 +15,42 @@ export type Offer = {
   payPriceCents: number;
   collectLabel: string | null;
   imageUrl: string | null;
+  partnerLogoUrl: string | null;
+  storeUrl: string | null;
+  instructions: string[];
+  availabilityLabel: string | null;
+  statusLabel: string | null;
+  validityLabel: string | null;
+  terms: string | null;
   accent: string;
   illustration: IllustrationKind;
 };
 
-const catalogColumns =
-  'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url';
-
 type CatalogOfferRow = {
+  availability_label: string | null;
+  collect_end: string | null;
+  collect_start: string | null;
+  description: string;
+  id: string;
+  image_url: string | null;
+  instructions: string[] | string | null;
+  list_price_cents: number;
+  location_address: string | null;
+  location_name: string | null;
+  partner_logo_url: string | null;
+  partner_name: string | null;
+  pay_price_cents: number;
+  points_cost: number;
+  slug: string;
+  status_label: string | null;
+  store_url: string | null;
+  terms: string | null;
+  title: string;
+  validity_label: string | null;
+  value_label: string;
+};
+
+type LegacyCatalogOfferRow = {
   collect_end: string | null;
   collect_start: string | null;
   description: string;
@@ -30,14 +58,20 @@ type CatalogOfferRow = {
   image_url: string | null;
   list_price_cents: number;
   location_address: string | null;
-  location_name: string;
-  partner_name: string;
+  location_name: string | null;
+  partner_name: string | null;
   pay_price_cents: number;
   points_cost: number;
   slug: string;
   title: string;
   value_label: string;
 };
+
+export const defaultRedeemInstructions = [
+  'Copy your discount code.',
+  'Open the partner store.',
+  'Paste the code at checkout before you pay.',
+];
 
 function formatClock(value: string) {
   const match = /^(\d{2}):(\d{2})/.exec(value);
@@ -56,52 +90,126 @@ function collectLabel(start: string | null, end: string | null) {
   return `Collect: ${formatClock(start)} - ${formatClock(end)}`;
 }
 
+export function parseInstructions(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((step): step is string => typeof step === 'string')
+      .map((step) => step.trim())
+      .filter((step) => step.length > 0);
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .split(/\r?\n/)
+      .map((step) => step.replace(/^\d+[\).\s]+/, '').trim())
+      .filter((step) => step.length > 0);
+  }
+
+  return [];
+}
+
+function optionalText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export function mapCatalogOffer(row: CatalogOfferRow): Offer {
-  const address = row.location_address?.trim();
+  const address = optionalText(row.location_address);
+  const location = optionalText(row.location_name);
+  const instructions = parseInstructions(row.instructions);
 
   return {
     accent: '#D9E8DF',
-    address: address ? address : row.location_name,
+    address,
+    availabilityLabel: optionalText(row.availability_label),
     collectLabel: collectLabel(row.collect_start, row.collect_end),
     description: row.description,
     id: row.id,
     illustration: 'flat-white',
-    imageUrl: row.image_url,
+    imageUrl: optionalText(row.image_url),
+    instructions: instructions.length > 0 ? instructions : defaultRedeemInstructions,
     listPriceCents: row.list_price_cents,
-    location: row.location_name,
-    partner: row.partner_name,
+    location,
+    partner: optionalText(row.partner_name) ?? 'Partner',
+    partnerLogoUrl: optionalText(row.partner_logo_url),
     payPriceCents: row.pay_price_cents,
     points: row.points_cost,
     slug: row.slug,
+    statusLabel: optionalText(row.status_label),
+    storeUrl: optionalText(row.store_url),
+    terms: optionalText(row.terms),
     title: row.title,
+    validityLabel: optionalText(row.validity_label),
     value: row.value_label,
   };
 }
 
+function mapLegacyCatalogOffer(row: LegacyCatalogOfferRow): Offer {
+  return mapCatalogOffer({
+    ...row,
+    availability_label: null,
+    instructions: null,
+    partner_logo_url: null,
+    status_label: null,
+    store_url: null,
+    terms: null,
+    validity_label: null,
+  });
+}
+
 export async function loadOffers() {
-  const { data, error } = await supabase
+  const primary = await supabase
     .from('catalog_offers')
-    .select(catalogColumns)
+    .select(
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, availability_label, status_label, validity_label, terms',
+    )
     .order('partner_name')
     .order('title');
 
-  if (error || !data) {
+  if (!primary.error && primary.data) {
+    return primary.data.map(mapCatalogOffer);
+  }
+
+  // Fallback while discount-code catalog columns are rolling out.
+  const legacy = await supabase
+    .from('catalog_offers')
+    .select(
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url',
+    )
+    .order('partner_name')
+    .order('title');
+
+  if (legacy.error || !legacy.data) {
     return null;
   }
 
-  return data.map(mapCatalogOffer);
+  return legacy.data.map(mapLegacyCatalogOffer);
 }
 
 export async function loadOffer(id: string) {
-  const { data, error } = await supabase
+  const primary = await supabase
     .from('catalog_offers')
-    .select(catalogColumns)
+    .select(
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, availability_label, status_label, validity_label, terms',
+    )
     .eq('id', id)
     .maybeSingle();
 
-  if (error || !data) {
+  if (!primary.error && primary.data) {
+    return mapCatalogOffer(primary.data);
+  }
+
+  const legacy = await supabase
+    .from('catalog_offers')
+    .select(
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url',
+    )
+    .eq('id', id)
+    .maybeSingle();
+
+  if (legacy.error || !legacy.data) {
     return null;
   }
 
-  return mapCatalogOffer(data);
+  return mapLegacyCatalogOffer(legacy.data);
 }

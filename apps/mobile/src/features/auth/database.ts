@@ -176,16 +176,19 @@ export type Database = {
         Row: {
           id: string;
           member_id: string;
-          partner_id: string;
-          location_id: string;
+          partner_id: string | null;
+          location_id: string | null;
           offer_id: string;
           partner_name: string;
-          location_name: string;
+          location_name: string | null;
           offer_title: string;
           points_spent: number;
           value_label: string;
           redeemed_at: string;
           till_confirmed_at: string | null;
+          discount_code: string | null;
+          store_url: string | null;
+          instructions: string[] | string | null;
           client_request_id: string;
         };
         Insert: never;
@@ -233,8 +236,8 @@ export type Database = {
         Row: {
           id: string;
           slug: string;
-          partner_name: string;
-          location_name: string;
+          partner_name: string | null;
+          location_name: string | null;
           title: string;
           value_label: string;
           points_cost: number;
@@ -245,6 +248,13 @@ export type Database = {
           collect_start: string | null;
           collect_end: string | null;
           image_url: string | null;
+          partner_logo_url: string | null;
+          store_url: string | null;
+          instructions: string[] | string | null;
+          availability_label: string | null;
+          status_label: string | null;
+          validity_label: string | null;
+          terms: string | null;
         };
         Relationships: [];
       };
