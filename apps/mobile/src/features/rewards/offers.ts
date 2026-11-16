@@ -37,11 +37,13 @@ type CatalogOfferRow = {
   list_price_cents: number;
   location_address: string | null;
   location_name: string | null;
+  offer_type: string | null;
   partner_logo_url: string | null;
   partner_name: string | null;
   pay_price_cents: number;
   points_cost: number;
   slug: string;
+  starts_at: string | null;
   status_label: string | null;
   store_url: string | null;
   terms: string | null;
@@ -117,11 +119,18 @@ export function mapCatalogOffer(row: CatalogOfferRow): Offer {
   const address = optionalText(row.location_address);
   const location = optionalText(row.location_name);
   const instructions = parseInstructions(row.instructions);
+  const statusLabel = optionalText(row.status_label)
+    ?? (optionalText(row.offer_type) === 'discount_code' ? 'Online discount code' : null);
+  const startsAt = row.starts_at ? new Date(row.starts_at) : null;
+  const availabilityLabel = optionalText(row.availability_label)
+    ?? (startsAt && !Number.isNaN(startsAt.getTime())
+      ? `Available from ${new Intl.DateTimeFormat('en-IE', { day: 'numeric', month: 'short' }).format(startsAt)}`
+      : null);
 
   return {
     accent: '#D9E8DF',
     address,
-    availabilityLabel: optionalText(row.availability_label),
+    availabilityLabel,
     collectLabel: collectLabel(row.collect_start, row.collect_end),
     description: row.description,
     id: row.id,
@@ -135,7 +144,7 @@ export function mapCatalogOffer(row: CatalogOfferRow): Offer {
     payPriceCents: row.pay_price_cents,
     points: row.points_cost,
     slug: row.slug,
-    statusLabel: optionalText(row.status_label),
+    statusLabel,
     storeUrl: optionalText(row.store_url),
     terms: optionalText(row.terms),
     title: row.title,
@@ -149,7 +158,9 @@ function mapLegacyCatalogOffer(row: LegacyCatalogOfferRow): Offer {
     ...row,
     availability_label: null,
     instructions: null,
+    offer_type: null,
     partner_logo_url: null,
+    starts_at: null,
     status_label: null,
     store_url: null,
     terms: null,
@@ -161,13 +172,19 @@ export async function loadOffers() {
   const primary = await supabase
     .from('catalog_offers')
     .select(
-      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, availability_label, status_label, validity_label, terms',
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, offer_type, starts_at',
     )
     .order('partner_name')
     .order('title');
 
   if (!primary.error && primary.data) {
-    return primary.data.map(mapCatalogOffer);
+    return primary.data.map((row) => mapCatalogOffer({
+      ...row,
+      availability_label: null,
+      status_label: null,
+      terms: null,
+      validity_label: null,
+    }));
   }
 
   // Fallback while discount-code catalog columns are rolling out.
@@ -190,13 +207,19 @@ export async function loadOffer(id: string) {
   const primary = await supabase
     .from('catalog_offers')
     .select(
-      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, availability_label, status_label, validity_label, terms',
+      'id, slug, partner_name, location_name, title, value_label, points_cost, location_address, description, list_price_cents, pay_price_cents, collect_start, collect_end, image_url, partner_logo_url, store_url, instructions, offer_type, starts_at',
     )
     .eq('id', id)
     .maybeSingle();
 
   if (!primary.error && primary.data) {
-    return mapCatalogOffer(primary.data);
+    return mapCatalogOffer({
+      ...primary.data,
+      availability_label: null,
+      status_label: null,
+      terms: null,
+      validity_label: null,
+    });
   }
 
   const legacy = await supabase

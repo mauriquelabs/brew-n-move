@@ -251,6 +251,8 @@ export type Database = {
           partner_logo_url: string | null;
           store_url: string | null;
           instructions: string[] | string | null;
+          offer_type: string | null;
+          starts_at: string | null;
           availability_label: string | null;
           status_label: string | null;
           validity_label: string | null;

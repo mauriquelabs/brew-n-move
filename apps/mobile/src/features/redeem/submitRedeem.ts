@@ -15,7 +15,8 @@ export type RedeemReason =
   | 'outside_geofence'
   | 'redeemed'
   | 'sold_out'
-  | 'unavailable';
+  | 'unavailable'
+  | 'wrong_offer_type';
 
 export type RedeemConfirmation = {
   discountCode: string | null;
@@ -53,6 +54,7 @@ const confirmedReasons = new Set<RedeemReason>([
   'outside_geofence',
   'redeemed',
   'sold_out',
+  'wrong_offer_type',
 ]);
 
 function unconfirmed(): RedeemResponse {
@@ -253,11 +255,16 @@ export function listMyRewards() {
     });
 }
 
-export function submitExchange(body: { commit: boolean; offerId: string; requestId?: string }) {
+export function submitGetCode(body: { commit: boolean; offerId: string; requestId?: string }) {
   return postRedeem({
-    action: 'exchange',
+    action: 'get-code',
     commit: body.commit,
     offerId: body.offerId,
     requestId: body.requestId,
   });
+}
+
+/** @deprecated Café exchange path is paused; use submitGetCode for live offers. */
+export function submitExchange(body: { commit: boolean; offerId: string; requestId?: string }) {
+  return submitGetCode(body);
 }

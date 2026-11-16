@@ -38,7 +38,7 @@ import {
 } from '../rewards/offers';
 import {
   lookupVoucher,
-  submitExchange,
+  submitGetCode,
   type RedeemConfirmation,
   type RedeemReason,
 } from './submitRedeem';
@@ -57,7 +57,7 @@ function blockedCopy(reason: RedeemReason) {
   if (reason === 'insufficient_balance') {
     return 'You need more Brew Points for this reward.';
   }
-  if (reason === 'budget_exhausted' || reason === 'sold_out' || reason === 'offer_unavailable') {
+  if (reason === 'budget_exhausted' || reason === 'sold_out' || reason === 'offer_unavailable' || reason === 'wrong_offer_type') {
     return 'This reward is not available right now.';
   }
   if (reason === 'not_onboarded' || reason === 'not_signed_in') {
@@ -223,7 +223,7 @@ export function RedeemScreen() {
     setPhase({ kind: 'submitting' });
     setCopied(false);
     try {
-      const result = await submitExchange({
+      const result = await submitGetCode({
         commit: true,
         offerId: offer.id,
         requestId: randomUUID(),
@@ -231,20 +231,22 @@ export function RedeemScreen() {
       if (result.balance != null) {
         applyBalance(result.balance);
       }
-      if (result.reason === 'issued' && result.confirmation) {
+      if (
+        (result.reason === 'issued' || result.reason === 'redeemed')
+        && result.confirmation?.discountCode
+      ) {
         const confirmation: RedeemConfirmation = {
           ...result.confirmation,
-          discountCode: result.confirmation.discountCode,
           instructions: result.confirmation.instructions.length > 0
             ? result.confirmation.instructions
             : offer.instructions,
           storeUrl: result.confirmation.storeUrl ?? offer.storeUrl,
         };
-        if (!confirmation.discountCode) {
-          setPhase({ kind: 'unconfirmed' });
-          return;
-        }
         showCode(confirmation);
+        return;
+      }
+      if ((result.reason === 'issued' || result.reason === 'redeemed') && !result.confirmation?.discountCode) {
+        setPhase({ kind: 'unconfirmed' });
         return;
       }
       if (!result.confirmed) {
