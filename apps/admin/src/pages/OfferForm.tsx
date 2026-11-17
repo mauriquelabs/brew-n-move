@@ -76,14 +76,20 @@ function parseCodes(text: string) {
 }
 
 function reasonCopy(reason: string) {
-  if (reason === 'codes_required') {
-    return 'Upload at least one discount code before publishing.';
+  if (reason === 'codes_required' || reason === 'needs_codes') {
+    return 'Upload at least one unused discount code before publishing.';
   }
   if (reason === 'duplicate_codes') {
     return 'One or more codes are already used. Remove duplicates and try again.';
   }
   if (reason === 'invalid_dates') {
     return 'End date must be on or after the start date.';
+  }
+  if (reason === 'removed_terminal') {
+    return 'This offer was removed and cannot be changed.';
+  }
+  if (reason === 'cannot_draft_after_publish' || reason === 'invalid_transition') {
+    return 'That status change is not allowed.';
   }
   return reason;
 }
@@ -200,47 +206,53 @@ export function OfferForm({ session }: Props) {
     }));
   }
 
-  async function save(event: FormEvent, status: 'draft' | 'active' | 'paused') {
+  function offerBody() {
+    return {
+      description: form.description,
+      expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
+      instructions: form.instructions.map((step) => step.trim()).filter(Boolean),
+      listPriceCents: listCents,
+      offerType: 'discount_code',
+      partnerId,
+      payPriceCents: pricing!.payCents,
+      pointsCost: pricing!.pointsCost,
+      quantity,
+      startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
+      title: form.title,
+      valueLabel: pricing!.valueLabel,
+    };
+  }
+
+  async function save(event: FormEvent, intent: 'draft' | 'active' | 'fields') {
     event.preventDefault();
     if (!pricing || !guideOk) {
       setError('Enter a full price, discount percentage, and code quantity guide of at least 1.');
       return;
     }
-    if (status === 'active' && !canPublish && !editing) {
+    if (intent === 'active' && !canPublish && !editing) {
       setError('Upload at least one discount code before publishing.');
       return;
     }
-    if (status === 'active' && editing && codesTotal < 1 && parseCodes(appendCodes).length < 1) {
+    if (intent === 'active' && editing && codesTotal < 1 && parseCodes(appendCodes).length < 1) {
       setError('Upload at least one discount code before publishing.');
+      return;
+    }
+    if (offer?.status === 'removed') {
+      setError(reasonCopy('removed_terminal'));
       return;
     }
     setBusy(true);
     setError(null);
     setNotice(null);
-    const body = {
-      description: form.description,
-      expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
-      instructions: form.instructions.map((step) => step.trim()).filter(Boolean),
-      listPriceCents: pricing ? listCents : null,
-      offerType: 'discount_code',
-      partnerId,
-      payPriceCents: pricing.payCents,
-      pointsCost: pricing.pointsCost,
-      quantity,
-      startsAt: form.startsAt ? new Date(form.startsAt).toISOString() : null,
-      status,
-      title: form.title,
-      valueLabel: pricing.valueLabel,
-    };
     try {
       if (!editing) {
         const created = await createOffer(session, {
-          ...body,
+          ...offerBody(),
           codes: parsedCodes,
-          listPriceCents: listCents,
+          status: intent === 'active' ? 'active' : 'draft',
         });
         const createdOffer = created.offer as DiscountOffer;
-        setNotice(status === 'active' ? 'Published.' : 'Draft saved.');
+        setNotice(intent === 'active' ? 'Published.' : 'Draft saved.');
         navigate(`/partners/${partnerId}/offers/${createdOffer.id}`, { replace: true });
         return;
       }
@@ -248,13 +260,19 @@ export function OfferForm({ session }: Props) {
         await addOfferCodes(session, offerId!, parseCodes(appendCodes));
         setAppendCodes('');
       }
+      // Field updates never change status. Publish/pause/remove use set-status.
       const updated = await updateOffer(session, {
-        ...body,
-        listPriceCents: listCents,
+        ...offerBody(),
         offerId,
+        status: offer?.status === 'active' ? 'active' : offer?.status === 'paused' ? 'paused' : 'draft',
       });
-      setOffer(updated.offer as DiscountOffer);
-      setNotice(status === 'active' ? 'Published.' : status === 'paused' ? 'Paused.' : 'Draft saved.');
+      let next = updated.offer as DiscountOffer;
+      if (intent === 'active' && next.status !== 'active') {
+        const published = await setOfferStatus(session, offerId!, 'active');
+        next = published.offer as DiscountOffer;
+      }
+      setOffer(next);
+      setNotice(intent === 'active' ? 'Published.' : 'Saved.');
     } catch (caught) {
       setError(reasonCopy(caught instanceof Error ? caught.message : 'unavailable'));
     } finally {
@@ -262,16 +280,16 @@ export function OfferForm({ session }: Props) {
     }
   }
 
-  async function pause() {
+  async function setStatus(status: 'paused' | 'removed' | 'active') {
     if (!offerId) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      const updated = await setOfferStatus(session, offerId, 'paused');
+      const updated = await setOfferStatus(session, offerId, status);
       setOffer(updated.offer as DiscountOffer);
-      setNotice('Paused.');
+      setNotice(status === 'paused' ? 'Paused.' : status === 'removed' ? 'Removed.' : 'Published.');
     } catch (caught) {
       setError(reasonCopy(caught instanceof Error ? caught.message : 'unavailable'));
     } finally {
@@ -301,10 +319,15 @@ export function OfferForm({ session }: Props) {
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       {notice ? <p>{notice}</p> : null}
-      <form onSubmit={(event) => void save(event, offer?.status === 'active' ? 'active' : 'draft')}>
+      <form onSubmit={(event) => void save(event, editing ? 'fields' : 'draft')}>
         <label>
           Name
-          <input onChange={(event) => setField('title', event.target.value)} required value={form.title} />
+          <input
+            disabled={offer?.status === 'removed'}
+            onChange={(event) => setField('title', event.target.value)}
+            required
+            value={form.title}
+          />
         </label>
         <label>
           Description
@@ -391,23 +414,38 @@ export function OfferForm({ session }: Props) {
           </label>
         )}
         <div className="actions">
-          <button disabled={busy || !pricing || !guideOk || !form.title.trim()} type="submit">
-            {offer?.status === 'active' ? 'Save' : 'Save draft'}
-          </button>
-          {offer?.status === 'active' ? (
-            <button className="secondary" disabled={busy} onClick={() => void pause()} type="button">Pause</button>
+          {offer?.status === 'removed' ? (
+            <p className="muted">Removed offers are terminal and cannot be edited or republished.</p>
           ) : (
-            <button
-              className="secondary"
-              disabled={busy || !pricing || !guideOk || !canPublish}
-              onClick={(event) => void save(event, 'active')}
-              type="button"
-            >
-              Publish
-            </button>
+            <>
+              <button disabled={busy || !pricing || !guideOk || !form.title.trim()} type="submit">
+                {editing ? (offer?.status === 'draft' ? 'Save draft' : 'Save') : 'Save draft'}
+              </button>
+              {offer?.status === 'active' ? (
+                <button className="secondary" disabled={busy} onClick={() => void setStatus('paused')} type="button">
+                  Pause
+                </button>
+              ) : (
+                <button
+                  className="secondary"
+                  disabled={busy || !pricing || !guideOk || !canPublish}
+                  onClick={(event) => void save(event, 'active')}
+                  type="button"
+                >
+                  Publish
+                </button>
+              )}
+              {editing ? (
+                <button className="secondary" disabled={busy} onClick={() => void setStatus('removed')} type="button">
+                  Remove
+                </button>
+              ) : null}
+            </>
           )}
         </div>
-        {!canPublish ? <p className="muted">Publish stays disabled until at least one code is uploaded.</p> : null}
+        {!canPublish && offer?.status !== 'removed' ? (
+          <p className="muted">Publish stays disabled until at least one unused code is available.</p>
+        ) : null}
       </form>
     </main>
   );

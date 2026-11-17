@@ -4,7 +4,6 @@ import { json, requireAdmin } from '../_shared/admin.ts';
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const offerStatuses = new Set(['draft', 'paused', 'active', 'removed']);
-const offerTypes = new Set(['discount_code', 'exclusive', 'venue', 'gift_card', 'experience']);
 
 const defaultInstructions = [
   'Open this reward in Brew & Move and tap Get code.',
@@ -77,15 +76,52 @@ function slugFor(title: string) {
   return `${base}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-type OfferRow = {
+function mapReason(reason: string | undefined) {
+  if (reason === 'needs_codes') {
+    return 'codes_required';
+  }
+  return reason || 'unavailable';
+}
+
+function statusForReason(reason: string) {
+  if (reason === 'not_found' || reason === 'partner_not_found') {
+    return 404;
+  }
+  if (
+    reason === 'codes_required'
+    || reason === 'duplicate_codes'
+    || reason === 'slug_taken'
+    || reason === 'removed_terminal'
+    || reason === 'cannot_draft_after_publish'
+    || reason === 'invalid_transition'
+    || reason === 'wrong_offer_type'
+  ) {
+    return 409;
+  }
+  if (reason === 'invalid_payload' || reason === 'invalid_dates') {
+    return 400;
+  }
+  return 500;
+}
+
+type RpcClient = {
+  rpc: (
+    fn: string,
+    args?: Record<string, unknown>,
+  ) => PromiseLike<{ data: unknown; error: { message?: string } | null }>;
+  from: (table: string) => any;
+};
+
+type ListOfferRow = {
+  codes_available: number;
+  codes_total: number;
   created_at: string;
   description: string;
   expires_at: string | null;
   id: string;
+  image_url: string | null;
   instructions: string[] | null;
   list_price_cents: number;
-  offer_type: string;
-  partner_id: string | null;
   pay_price_cents: number;
   points_cost: number;
   quantity: number | null;
@@ -96,28 +132,10 @@ type OfferRow = {
   value_label: string;
 };
 
-async function codeCounts(
-  admin: { from: (table: string) => any },
-  offerId: string,
-) {
-  const codes = await admin
-    .from('offer_discount_codes')
-    .select('redemption_id')
-    .eq('offer_id', offerId);
-  if (codes.error) {
-    return null;
-  }
-  const rows = (codes.data ?? []) as Array<{ redemption_id: string | null }>;
+function mapListedOffer(row: ListOfferRow, partnerId: string | null = null) {
   return {
-    remaining: rows.filter((row) => row.redemption_id == null).length,
-    total: rows.length,
-  };
-}
-
-function mapOffer(row: OfferRow, counts: { remaining: number; total: number }) {
-  return {
-    codesRemaining: counts.remaining,
-    codesTotal: counts.total,
+    codesRemaining: row.codes_available,
+    codesTotal: row.codes_total,
     createdAt: row.created_at,
     description: row.description,
     expiresAt: row.expires_at,
@@ -126,8 +144,8 @@ function mapOffer(row: OfferRow, counts: { remaining: number; total: number }) {
       ? row.instructions
       : defaultInstructions,
     listPriceCents: row.list_price_cents,
-    offerType: row.offer_type,
-    partnerId: row.partner_id,
+    offerType: 'discount_code',
+    partnerId,
     payPriceCents: row.pay_price_cents,
     pointsCost: row.points_cost,
     quantity: row.quantity,
@@ -136,6 +154,85 @@ function mapOffer(row: OfferRow, counts: { remaining: number; total: number }) {
     status: row.status,
     title: row.title,
     valueLabel: row.value_label,
+  };
+}
+
+async function rpcJson(admin: RpcClient, fn: string, args: Record<string, unknown>) {
+  const result = await admin.rpc(fn, args);
+  if (result.error) {
+    return { error: json({ ok: false, reason: 'unavailable' }, 500) };
+  }
+  const payload = result.data as Record<string, unknown> | null;
+  if (!payload || typeof payload !== 'object') {
+    return { error: json({ ok: false, reason: 'unavailable' }, 500) };
+  }
+  if (payload.ok === false) {
+    const reason = mapReason(typeof payload.reason === 'string' ? payload.reason : undefined);
+    return { error: json({ ok: false, reason }, statusForReason(reason)) };
+  }
+  return { payload };
+}
+
+async function loadOffer(admin: RpcClient, offerId: string) {
+  const offer = await admin
+    .from('offers')
+    .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
+    .eq('id', offerId)
+    .eq('offer_type', 'discount_code')
+    .maybeSingle();
+  if (offer.error) {
+    return { error: json({ ok: false, reason: 'unavailable' }, 500) };
+  }
+  if (!offer.data) {
+    return { error: json({ ok: false, reason: 'not_found' }, 404) };
+  }
+  const inventory = await rpcJson(admin, 'admin_discount_offer_inventory', {
+    p_offer_id: offerId,
+  });
+  if ('error' in inventory && inventory.error) {
+    return inventory;
+  }
+  const counts = inventory.payload as {
+    available?: number;
+    total?: number;
+  };
+  const row = offer.data as {
+    created_at: string;
+    description: string;
+    expires_at: string | null;
+    id: string;
+    instructions: string[] | null;
+    list_price_cents: number;
+    partner_id: string | null;
+    pay_price_cents: number;
+    points_cost: number;
+    quantity: number | null;
+    slug: string;
+    starts_at: string | null;
+    status: string;
+    title: string;
+    value_label: string;
+  };
+  return {
+    offer: mapListedOffer({
+      codes_available: typeof counts.available === 'number' ? counts.available : 0,
+      codes_total: typeof counts.total === 'number' ? counts.total : 0,
+      created_at: row.created_at,
+      description: row.description,
+      expires_at: row.expires_at,
+      id: row.id,
+      image_url: null,
+      instructions: row.instructions,
+      list_price_cents: row.list_price_cents,
+      pay_price_cents: row.pay_price_cents,
+      points_cost: row.points_cost,
+      quantity: row.quantity,
+      slug: row.slug,
+      starts_at: row.starts_at,
+      status: row.status,
+      title: row.title,
+      value_label: row.value_label,
+    }, row.partner_id),
   };
 }
 
@@ -157,24 +254,13 @@ Deno.serve(async (req) => {
       if (!uuidPattern.test(id)) {
         return json({ ok: false, reason: 'invalid_payload' }, 400);
       }
-      const offer = await admin
-        .from('offers')
-        .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-        .eq('id', id)
-        .maybeSingle();
-      if (offer.error) {
-        return json({ ok: false, reason: 'unavailable' }, 500);
-      }
-      if (!offer.data) {
-        return json({ ok: false, reason: 'not_found' }, 404);
-      }
-      const counts = await codeCounts(admin, id);
-      if (!counts) {
-        return json({ ok: false, reason: 'unavailable' }, 500);
+      const loaded = await loadOffer(admin, id);
+      if ('error' in loaded && loaded.error) {
+        return loaded.error;
       }
       return json({
         defaultInstructions,
-        offer: mapOffer(offer.data as OfferRow, counts),
+        offer: loaded.offer,
         ok: true,
       });
     }
@@ -182,24 +268,20 @@ Deno.serve(async (req) => {
     if (!uuidPattern.test(partnerId)) {
       return json({ ok: false, reason: 'invalid_payload' }, 400);
     }
-    const offers = await admin
-      .from('offers')
-      .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-      .eq('partner_id', partnerId)
-      .neq('status', 'removed')
-      .order('created_at', { ascending: false });
-    if (offers.error) {
+    const listed = await admin.rpc('admin_list_partner_discount_offers', {
+      p_partner_id: partnerId,
+    });
+    if (listed.error) {
       return json({ ok: false, reason: 'unavailable' }, 500);
     }
-    const mapped = [];
-    for (const row of offers.data ?? []) {
-      const counts = await codeCounts(admin, row.id as string);
-      if (!counts) {
-        return json({ ok: false, reason: 'unavailable' }, 500);
-      }
-      mapped.push(mapOffer(row as OfferRow, counts));
-    }
-    return json({ defaultInstructions, offers: mapped, ok: true });
+    const rows = (listed.data ?? []) as ListOfferRow[];
+    return json({
+      defaultInstructions,
+      offers: rows
+        .filter((row) => row.status !== 'removed')
+        .map((row) => mapListedOffer(row, partnerId)),
+      ok: true,
+    });
   }
 
   if (req.method !== 'POST') {
@@ -221,29 +303,22 @@ Deno.serve(async (req) => {
     if (!uuidPattern.test(offerId) || !codes || codes.length === 0) {
       return json({ ok: false, reason: 'invalid_payload' }, 400);
     }
-    const existing = await admin.from('offers').select('id, offer_type').eq('id', offerId).maybeSingle();
-    if (existing.error) {
-      return json({ ok: false, reason: 'unavailable' }, 500);
+    const uploaded = await rpcJson(admin, 'admin_upload_discount_codes', {
+      p_codes: codes,
+      p_offer_id: offerId,
+    });
+    if ('error' in uploaded && uploaded.error) {
+      return uploaded.error;
     }
-    if (!existing.data || existing.data.offer_type !== 'discount_code') {
-      return json({ ok: false, reason: 'not_found' }, 404);
-    }
-    const inserted = await admin
-      .from('offer_discount_codes')
-      .insert(codes.map((code) => ({ code, offer_id: offerId })))
-      .select('id');
-    if (inserted.error) {
-      const message = typeof inserted.error.message === 'string' ? inserted.error.message : '';
-      if (message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('unique')) {
-        return json({ ok: false, reason: 'duplicate_codes' }, 409);
-      }
-      return json({ ok: false, reason: 'unavailable' }, 500);
-    }
-    const counts = await codeCounts(admin, offerId);
+    const payload = uploaded.payload as {
+      available?: number;
+      inserted?: number;
+      total?: number;
+    };
     return json({
-      added: inserted.data?.length ?? codes.length,
-      codesRemaining: counts?.remaining ?? 0,
-      codesTotal: counts?.total ?? 0,
+      added: typeof payload.inserted === 'number' ? payload.inserted : codes.length,
+      codesRemaining: typeof payload.available === 'number' ? payload.available : 0,
+      codesTotal: typeof payload.total === 'number' ? payload.total : 0,
       ok: true,
     });
   }
@@ -254,38 +329,19 @@ Deno.serve(async (req) => {
     if (!uuidPattern.test(offerId) || !offerStatuses.has(status)) {
       return json({ ok: false, reason: 'invalid_payload' }, 400);
     }
-    const offer = await admin
-      .from('offers')
-      .select('id, offer_type, status')
-      .eq('id', offerId)
-      .maybeSingle();
-    if (offer.error) {
-      return json({ ok: false, reason: 'unavailable' }, 500);
+    const changed = await rpcJson(admin, 'admin_set_discount_offer_status', {
+      p_offer_id: offerId,
+      p_status: status,
+    });
+    if ('error' in changed && changed.error) {
+      return changed.error;
     }
-    if (!offer.data || offer.data.offer_type !== 'discount_code') {
-      return json({ ok: false, reason: 'not_found' }, 404);
+    const loaded = await loadOffer(admin, offerId);
+    if ('error' in loaded && loaded.error) {
+      return loaded.error;
     }
-    if (status === 'active') {
-      const counts = await codeCounts(admin, offerId);
-      if (!counts) {
-        return json({ ok: false, reason: 'unavailable' }, 500);
-      }
-      if (counts.total < 1) {
-        return json({ ok: false, reason: 'codes_required' }, 409);
-      }
-    }
-    const updated = await admin
-      .from('offers')
-      .update({ status })
-      .eq('id', offerId)
-      .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-      .maybeSingle();
-    if (updated.error || !updated.data) {
-      return json({ ok: false, reason: 'unavailable' }, 500);
-    }
-    const counts = await codeCounts(admin, offerId);
     return json({
-      offer: mapOffer(updated.data as OfferRow, counts ?? { remaining: 0, total: 0 }),
+      offer: loaded.offer,
       ok: true,
     });
   }
@@ -297,7 +353,6 @@ Deno.serve(async (req) => {
   const title = text(record.title);
   const description = text(record.description);
   const valueLabel = text(record.valueLabel) || title;
-  const offerType = text(record.offerType) || 'discount_code';
   const listPriceCents = asInteger(record.listPriceCents);
   const payPriceCents = asInteger(record.payPriceCents);
   const pointsCost = asInteger(record.pointsCost);
@@ -310,8 +365,6 @@ Deno.serve(async (req) => {
   if (
     !title
     || !description
-    || !offerTypes.has(offerType)
-    || offerType !== 'discount_code'
     || listPriceCents == null
     || listPriceCents <= 0
     || payPriceCents == null
@@ -324,13 +377,12 @@ Deno.serve(async (req) => {
     || startsAt === undefined
     || expiresAt === undefined
     || !instructions
-    || !offerStatuses.has(status)
-    || status === 'removed'
+    || (action === 'create' && status !== 'draft' && status !== 'active')
   ) {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
 
-  if (startsAt && expiresAt && Date.parse(startsAt) > Date.parse(expiresAt)) {
+  if (startsAt && expiresAt && Date.parse(startsAt) >= Date.parse(expiresAt)) {
     return json({ ok: false, reason: 'invalid_dates' }, 400);
   }
 
@@ -343,65 +395,38 @@ Deno.serve(async (req) => {
     if (status === 'active' && initialCodes.length < 1) {
       return json({ ok: false, reason: 'codes_required' }, 409);
     }
-    const partner = await admin.from('partners').select('id').eq('id', createPartnerId).maybeSingle();
-    if (partner.error) {
+
+    const created = await rpcJson(admin, 'admin_upsert_discount_offer', {
+      p_codes: initialCodes.length > 0 ? initialCodes : null,
+      p_description: description,
+      p_expires_at: expiresAt,
+      p_image_url: null,
+      p_instructions: instructions,
+      p_list_price_cents: listPriceCents,
+      p_offer_id: null,
+      p_partner_id: createPartnerId,
+      p_pay_price_cents: payPriceCents,
+      p_points_cost: pointsCost,
+      p_quantity: quantity,
+      p_slug: slugFor(title),
+      p_starts_at: startsAt,
+      p_status: status,
+      p_title: title,
+      p_value_label: valueLabel,
+    });
+    if ('error' in created && created.error) {
+      return created.error;
+    }
+    const createdId = text((created.payload as { id?: unknown }).id);
+    if (!uuidPattern.test(createdId)) {
       return json({ ok: false, reason: 'unavailable' }, 500);
     }
-    if (!partner.data) {
-      return json({ ok: false, reason: 'partner_not_found' }, 404);
+    const loaded = await loadOffer(admin, createdId);
+    if ('error' in loaded && loaded.error) {
+      return loaded.error;
     }
-    const inserted = await admin
-      .from('offers')
-      .insert({
-        description,
-        expires_at: expiresAt,
-        instructions,
-        list_price_cents: listPriceCents,
-        location_id: null,
-        offer_type: offerType,
-        partner_id: createPartnerId,
-        pay_price_cents: payPriceCents,
-        points_cost: pointsCost,
-        quantity,
-        slug: slugFor(title),
-        starts_at: startsAt,
-        status: status === 'active' ? 'draft' : status,
-        title,
-        value_label: valueLabel,
-      })
-      .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-      .single();
-    if (inserted.error || !inserted.data) {
-      return json({ ok: false, reason: 'unavailable' }, 500);
-    }
-    if (initialCodes.length > 0) {
-      const coded = await admin
-        .from('offer_discount_codes')
-        .insert(initialCodes.map((code) => ({ code, offer_id: inserted.data.id })));
-      if (coded.error) {
-        const message = typeof coded.error.message === 'string' ? coded.error.message : '';
-        if (message.toLowerCase().includes('duplicate') || message.toLowerCase().includes('unique')) {
-          return json({ id: inserted.data.id, ok: false, reason: 'duplicate_codes' }, 409);
-        }
-        return json({ id: inserted.data.id, ok: false, reason: 'unavailable' }, 500);
-      }
-    }
-    let row = inserted.data as OfferRow;
-    if (status === 'active') {
-      const activated = await admin
-        .from('offers')
-        .update({ status: 'active' })
-        .eq('id', inserted.data.id)
-        .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-        .single();
-      if (activated.error || !activated.data) {
-        return json({ id: inserted.data.id, ok: false, reason: 'unavailable' }, 500);
-      }
-      row = activated.data as OfferRow;
-    }
-    const counts = await codeCounts(admin, inserted.data.id as string);
     return json({
-      offer: mapOffer(row, counts ?? { remaining: 0, total: 0 }),
+      offer: loaded.offer,
       ok: true,
     });
   }
@@ -410,50 +435,57 @@ Deno.serve(async (req) => {
   if (!uuidPattern.test(offerId)) {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
-  const current = await admin
-    .from('offers')
-    .select('id, offer_type, status')
-    .eq('id', offerId)
-    .maybeSingle();
-  if (current.error) {
+
+  const current = await loadOffer(admin, offerId);
+  if ('error' in current && current.error) {
+    return current.error;
+  }
+  const partnerIdForUpdate = text(current.offer?.partnerId);
+  if (!uuidPattern.test(partnerIdForUpdate)) {
     return json({ ok: false, reason: 'unavailable' }, 500);
   }
-  if (!current.data || current.data.offer_type !== 'discount_code') {
-    return json({ ok: false, reason: 'not_found' }, 404);
+
+  const updated = await rpcJson(admin, 'admin_upsert_discount_offer', {
+    p_codes: null,
+    p_description: description,
+    p_expires_at: expiresAt,
+    p_image_url: null,
+    p_instructions: instructions,
+    p_list_price_cents: listPriceCents,
+    p_offer_id: offerId,
+    p_partner_id: partnerIdForUpdate,
+    p_pay_price_cents: payPriceCents,
+    p_points_cost: pointsCost,
+    p_quantity: quantity,
+    p_slug: text(current.offer?.slug) || slugFor(title),
+    p_starts_at: startsAt,
+    p_status: 'draft',
+    p_title: title,
+    p_value_label: valueLabel,
+  });
+  if ('error' in updated && updated.error) {
+    return updated.error;
   }
-  if (status === 'active') {
-    const counts = await codeCounts(admin, offerId);
-    if (!counts) {
-      return json({ ok: false, reason: 'unavailable' }, 500);
+
+  // Field upsert never changes status. Apply an explicit transition when asked.
+  if (status === 'active' || status === 'paused' || status === 'removed') {
+    if (current.offer?.status !== status) {
+      const changed = await rpcJson(admin, 'admin_set_discount_offer_status', {
+        p_offer_id: offerId,
+        p_status: status,
+      });
+      if ('error' in changed && changed.error) {
+        return changed.error;
+      }
     }
-    if (counts.total < 1) {
-      return json({ ok: false, reason: 'codes_required' }, 409);
-    }
   }
-  const updated = await admin
-    .from('offers')
-    .update({
-      description,
-      expires_at: expiresAt,
-      instructions,
-      list_price_cents: listPriceCents,
-      pay_price_cents: payPriceCents,
-      points_cost: pointsCost,
-      quantity,
-      starts_at: startsAt,
-      status,
-      title,
-      value_label: valueLabel,
-    })
-    .eq('id', offerId)
-    .select('id, partner_id, slug, title, description, value_label, points_cost, quantity, expires_at, starts_at, status, offer_type, list_price_cents, pay_price_cents, instructions, created_at')
-    .maybeSingle();
-  if (updated.error || !updated.data) {
-    return json({ ok: false, reason: 'unavailable' }, 500);
+
+  const loaded = await loadOffer(admin, offerId);
+  if ('error' in loaded && loaded.error) {
+    return loaded.error;
   }
-  const counts = await codeCounts(admin, offerId);
   return json({
-    offer: mapOffer(updated.data as OfferRow, counts ?? { remaining: 0, total: 0 }),
+    offer: loaded.offer,
     ok: true,
   });
 });

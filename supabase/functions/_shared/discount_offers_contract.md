@@ -1,55 +1,54 @@
 # Discount-code offers — Edge / DB contract
 
-Admin Edge Functions (`admin-partners`, `admin-offers`) and redeem `get-code` depend on schema owned by the DB agent. Expected shape:
+Admin Edge Functions (`admin-partners`, `admin-offers`) and member redeem depend on the discount-code schema migration. Mutations go through Postgres RPCs — not direct writes to the private code pool.
 
 ## Tables / columns
 
 ### `public.partners`
-- existing: `id`, `name`, `created_at`
-- add: `logo_url text null`, `store_url text null`
+- `id`, `name`, `created_at`
+- `logo_url text null`, `store_url text null`
 
 ### `public.offers`
-- `location_id` **nullable**
-- add: `partner_id uuid null` references partners
-- add: `offer_type text` (`discount_code` | reserved others)
-- add: `starts_at timestamptz null`
-- add: `instructions jsonb` (ordered string array)
-- `status` includes **`draft` | `paused` | `active` | `removed`**
+- `location_id` nullable
+- `partner_id uuid` (required for `discount_code`)
+- `offer_type text` (`discount_code` | reserved others)
+- `starts_at timestamptz null`
+- `instructions jsonb` (ordered string array)
+- `status`: **`draft` | `paused` | `active` | `removed`**
+  - `removed` is terminal
+  - `draft` only when staff saves a draft (or create defaults to draft)
+  - create may publish directly as `active` when codes are supplied
+  - activate requires ≥1 unused code
 
-### `public.offer_discount_codes`
-- `id uuid pk`
-- `offer_id uuid not null` → offers
-- `code text not null` **unique globally**
-- `redemption_id uuid null` → redemptions (set once when assigned)
-- `created_at timestamptz`
+### `private.offer_discount_codes`
+- Not exposed on the Data API
+- `offer_id`, globally unique `code`, `redemption_id` / `assigned_at`
+- Assigned rows cascade-delete with their redemption (no re-pool)
 
 ### `public.redemptions`
 - `location_id` nullable for online
-- optional denormalized `discount_code text` for My rewards re-show (or join via `offer_discount_codes`)
+- Snapshot fields: `fulfillment_code`, `instructions`, `store_url`
 
-### Catalog
-- expose `offer_type`, `instructions`, `starts_at`, partner `logo_url` / `store_url`
-- filter active + start/end; prefer hide when no unused codes (or fail redeem `sold_out`)
+## Admin RPCs (service_role execute)
 
-## Member RPC (required by `redeem`)
+- `admin_upsert_partner(p_id, p_name, p_store_url, p_logo_url)`
+- `admin_upsert_discount_offer(..., p_status default draft, p_codes default null)`
+- `admin_set_discount_offer_status(p_offer_id, p_status)`
+- `admin_upload_discount_codes(p_offer_id, p_codes)`
+- `admin_discount_offer_inventory(p_offer_id)`
+- `admin_list_partner_discount_offers(p_partner_id)`
 
-`public.redeem_discount_code(p_member_id, p_offer_id, p_request_id, p_commit boolean) returns jsonb`
+## Admin Edge
+
+- `admin-partners` GET list / GET `?id=` / POST create|update via `admin_upsert_partner`
+- Partner detail offers come from `admin_list_partner_discount_offers` (removed hidden)
+- `admin-offers` GET `?partnerId=` / GET `?id=` / POST create|update|set-status|add-codes via the RPCs above
+- Edge maps `needs_codes` → `codes_required` for the admin UI
+
+## Member redeem
+
+`public.redeem_discount_code_offer(p_member_id, p_offer_id, p_request_id, p_commit boolean)`
 
 - Idempotent on `(member_id, client_request_id)`
-- On commit: deduct points, insert redemption, assign one unused code (`FOR UPDATE SKIP LOCKED`), no vault / till
-- Reasons: `eligible` | `redeemed` | `not_onboarded` | `offer_unavailable` | `sold_out` | `insufficient_balance` | `wrong_offer_type` | `invalid_payload`
-- Success fields include `discount_code`, `store_url`, `instructions`, `partner`, `title`, `value_label`, `points_spent`, `redeemed_at`, `redemption_id`, `balance`
-
-### Edge `redeem` routing
-
-- `action: "get-code"` → always `redeem_discount_code`
-- `action: "exchange"` → if offer `offer_type = discount_code`, same RPC (mobile Get code currently uses exchange); else café `exchange_offer`
-- `action: "till"` → café only; never for discount codes
-- Response camelCase aliases: `discountCode`, `storeUrl`, `instructions`, plus existing redemption fields
-- Prefer reason `redeemed` for a completed Get code (mobile also accepts `issued` if `discountCode` is present)
-
-## Admin Edge (implemented; service-role table access)
-
-- `admin-partners` GET list / GET `?id=` / POST create|update
-- `admin-offers` GET `?partnerId=` / GET `?id=` / POST create|update|set-status|add-codes
-- Publish (`status=active`) rejected with `codes_required` when pool empty
+- On commit: deduct points, insert redemption, assign one unused code (`FOR UPDATE SKIP LOCKED`)
+- No vault / till / geofence

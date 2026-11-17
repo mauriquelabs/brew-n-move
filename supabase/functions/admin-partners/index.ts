@@ -32,6 +32,19 @@ type PartnerRow = {
   store_url: string | null;
 };
 
+type ListedOfferRow = {
+  codes_available: number;
+  codes_total: number;
+  created_at: string;
+  expires_at: string | null;
+  id: string;
+  points_cost: number;
+  quantity: number | null;
+  starts_at: string | null;
+  status: string;
+  title: string;
+};
+
 function mapPartner(row: PartnerRow) {
   return {
     createdAt: row.created_at,
@@ -40,6 +53,24 @@ function mapPartner(row: PartnerRow) {
     name: row.name,
     storeUrl: row.store_url,
   };
+}
+
+async function loadPartner(
+  admin: { from: (table: string) => any },
+  partnerId: string,
+) {
+  const partner = await admin
+    .from('partners')
+    .select('id, name, logo_url, store_url, created_at')
+    .eq('id', partnerId)
+    .maybeSingle();
+  if (partner.error) {
+    return { error: json({ ok: false, reason: 'unavailable' }, 500) };
+  }
+  if (!partner.data) {
+    return { error: json({ ok: false, reason: 'not_found' }, 404) };
+  }
+  return { partner: mapPartner(partner.data as PartnerRow) };
 }
 
 Deno.serve(async (req) => {
@@ -59,67 +90,35 @@ Deno.serve(async (req) => {
       if (!uuidPattern.test(id)) {
         return json({ ok: false, reason: 'invalid_payload' }, 400);
       }
-      const partner = await admin
-        .from('partners')
-        .select('id, name, logo_url, store_url, created_at')
-        .eq('id', id)
-        .maybeSingle();
-      if (partner.error) {
-        return json({ ok: false, reason: 'unavailable' }, 500);
+      const loaded = await loadPartner(admin, id);
+      if ('error' in loaded && loaded.error) {
+        return loaded.error;
       }
-      if (!partner.data) {
-        return json({ ok: false, reason: 'not_found' }, 404);
-      }
-      const offers = await admin
-        .from('offers')
-        .select('id, title, status, offer_type, points_cost, starts_at, expires_at, quantity, created_at')
-        .eq('partner_id', id)
-        .neq('status', 'removed')
-        .order('created_at', { ascending: false });
+      const offers = await admin.rpc('admin_list_partner_discount_offers', {
+        p_partner_id: id,
+      });
       if (offers.error) {
         return json({ ok: false, reason: 'unavailable' }, 500);
       }
-      const offerRows = offers.data ?? [];
-      const offerIds = offerRows.map((row) => row.id as string);
-      let codeStats = new Map<string, { remaining: number; total: number }>();
-      if (offerIds.length > 0) {
-        const codes = await admin
-          .from('offer_discount_codes')
-          .select('offer_id, redemption_id')
-          .in('offer_id', offerIds);
-        if (codes.error) {
-          return json({ ok: false, reason: 'unavailable' }, 500);
-        }
-        codeStats = new Map();
-        for (const row of codes.data ?? []) {
-          const offerId = row.offer_id as string;
-          const current = codeStats.get(offerId) ?? { remaining: 0, total: 0 };
-          current.total += 1;
-          if (row.redemption_id == null) {
-            current.remaining += 1;
-          }
-          codeStats.set(offerId, current);
-        }
-      }
+      const offerRows = (offers.data ?? []) as ListedOfferRow[];
       return json({
         ok: true,
-        offers: offerRows.map((row) => {
-          const stats = codeStats.get(row.id as string) ?? { remaining: 0, total: 0 };
-          return {
-            codesRemaining: stats.remaining,
-            codesTotal: stats.total,
+        offers: offerRows
+          .filter((row) => row.status !== 'removed')
+          .map((row) => ({
+            codesRemaining: row.codes_available,
+            codesTotal: row.codes_total,
             createdAt: row.created_at,
             expiresAt: row.expires_at,
             id: row.id,
-            offerType: row.offer_type,
+            offerType: 'discount_code',
             pointsCost: row.points_cost,
             quantity: row.quantity,
             startsAt: row.starts_at,
             status: row.status,
             title: row.title,
-          };
-        }),
-        partner: mapPartner(partner.data as PartnerRow),
+          })),
+        partner: loaded.partner,
       });
     }
 
@@ -156,19 +155,27 @@ Deno.serve(async (req) => {
   }
 
   if (action === 'create') {
-    const inserted = await admin
-      .from('partners')
-      .insert({
-        logo_url: logoUrl,
-        name,
-        store_url: storeUrl,
-      })
-      .select('id, name, logo_url, store_url, created_at')
-      .single();
-    if (inserted.error || !inserted.data) {
+    const inserted = await admin.rpc('admin_upsert_partner', {
+      p_id: null,
+      p_logo_url: logoUrl,
+      p_name: name,
+      p_store_url: storeUrl,
+    });
+    if (inserted.error) {
       return json({ ok: false, reason: 'unavailable' }, 500);
     }
-    return json({ ok: true, partner: mapPartner(inserted.data as PartnerRow) });
+    const payload = inserted.data as { id?: string; ok?: boolean; reason?: string } | null;
+    if (!payload || payload.ok === false || typeof payload.id !== 'string') {
+      return json({
+        ok: false,
+        reason: typeof payload?.reason === 'string' ? payload.reason : 'unavailable',
+      }, 400);
+    }
+    const loaded = await loadPartner(admin, payload.id);
+    if ('error' in loaded && loaded.error) {
+      return loaded.error;
+    }
+    return json({ ok: true, partner: loaded.partner });
   }
 
   if (action !== 'update') {
@@ -179,21 +186,23 @@ Deno.serve(async (req) => {
   if (!uuidPattern.test(partnerId)) {
     return json({ ok: false, reason: 'invalid_payload' }, 400);
   }
-  const updated = await admin
-    .from('partners')
-    .update({
-      logo_url: logoUrl,
-      name,
-      store_url: storeUrl,
-    })
-    .eq('id', partnerId)
-    .select('id, name, logo_url, store_url, created_at')
-    .maybeSingle();
+  const updated = await admin.rpc('admin_upsert_partner', {
+    p_id: partnerId,
+    p_logo_url: logoUrl,
+    p_name: name,
+    p_store_url: storeUrl,
+  });
   if (updated.error) {
     return json({ ok: false, reason: 'unavailable' }, 500);
   }
-  if (!updated.data) {
-    return json({ ok: false, reason: 'not_found' }, 404);
+  const payload = updated.data as { id?: string; ok?: boolean; reason?: string } | null;
+  if (!payload || payload.ok === false) {
+    const reason = typeof payload?.reason === 'string' ? payload.reason : 'unavailable';
+    return json({ ok: false, reason }, reason === 'not_found' ? 404 : 400);
   }
-  return json({ ok: true, partner: mapPartner(updated.data as PartnerRow) });
+  const loaded = await loadPartner(admin, partnerId);
+  if ('error' in loaded && loaded.error) {
+    return loaded.error;
+  }
+  return json({ ok: true, partner: loaded.partner });
 });
