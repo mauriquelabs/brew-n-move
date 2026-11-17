@@ -12,8 +12,9 @@ This repo contains:
 - `apps/admin` — internal admin app, Vite, React, and TypeScript
 - `supabase` — Postgres, auth, authorization policies, and Edge Functions
 - `solana` — devnet rewards ledger
+- `docs` — product and schema documentation
 
-Member and admin apps share one Supabase project.
+Member and admin apps share one Supabase project. The target production-minded entity model, offer status rules, and partner/member field guidance live in [`docs/database-model.md`](docs/database-model.md).
 
 ## MVP
 
