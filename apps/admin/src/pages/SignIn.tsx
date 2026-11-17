@@ -16,7 +16,7 @@ export function SignIn({ onSession, session }: Props) {
   const [busy, setBusy] = useState(false);
 
   if (session) {
-    return <Navigate to="/reward-budgets" replace />;
+    return <Navigate to="/partners" replace />;
   }
 
   async function submit(event: FormEvent) {
@@ -35,7 +35,7 @@ export function SignIn({ onSession, session }: Props) {
   return (
     <main className="narrow">
       <h1>Brew &amp; Move admin</h1>
-      <p>Staff sign-in. Members cannot open Reward Budgets.</p>
+      <p>Staff sign-in. Manage partners and discount-code offers.</p>
       <form onSubmit={submit}>
         <label>
           Email
