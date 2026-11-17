@@ -99,7 +99,7 @@ async function database() {
   return { psql, stop };
 }
 
-test('discount-code publish, redeem, inventory, and catalog', async () => {
+test('discount-code publish, redeem, inventory, status rules, and delete', async () => {
   const { psql, stop } = await database();
   try {
     const partner = JSON.parse(await psql(`
@@ -138,6 +138,12 @@ test('discount-code publish, redeem, inventory, and catalog', async () => {
     `));
     assert.equal(blocked.ok, false);
     assert.equal(blocked.reason, 'needs_codes');
+
+    const draftToPaused = JSON.parse(await psql(`
+      select private.admin_set_discount_offer_status('${created.id}', 'paused');
+    `));
+    assert.equal(draftToPaused.ok, false);
+    assert.equal(draftToPaused.reason, 'invalid_transition');
 
     const upload = JSON.parse(await psql(`
       select private.admin_upload_discount_codes(
@@ -231,11 +237,113 @@ test('discount-code publish, redeem, inventory, and catalog', async () => {
       select private.admin_set_discount_offer_status('${created.id}', 'paused');
     `));
     assert.equal(paused.ok, true);
+
     const draftAgain = JSON.parse(await psql(`
       select private.admin_set_discount_offer_status('${created.id}', 'draft');
     `));
     assert.equal(draftAgain.ok, false);
     assert.equal(draftAgain.reason, 'cannot_draft_after_publish');
+
+    const resumed = JSON.parse(await psql(`
+      select private.admin_set_discount_offer_status('${created.id}', 'active');
+    `));
+    assert.equal(resumed.ok, true);
+
+    const removed = JSON.parse(await psql(`
+      select private.admin_set_discount_offer_status('${created.id}', 'removed');
+    `));
+    assert.equal(removed.ok, true);
+
+    const revive = JSON.parse(await psql(`
+      select private.admin_set_discount_offer_status('${created.id}', 'active');
+    `));
+    assert.equal(revive.ok, false);
+    assert.equal(revive.reason, 'removed_terminal');
+
+    const editRemoved = JSON.parse(await psql(`
+      select private.admin_upsert_discount_offer(
+        '${created.id}',
+        '${partner.id}',
+        'online-outfit-20',
+        '20% offline',
+        'Use at checkout on the partner store.',
+        '20% off',
+        4500,
+        3600,
+        400,
+        3,
+        null,
+        null,
+        '["Open the partner store","Enter your code at checkout","Enjoy"]'::jsonb,
+        null
+      );
+    `));
+    assert.equal(editRemoved.ok, false);
+    assert.equal(editRemoved.reason, 'removed_terminal');
+
+    const publishedDirect = JSON.parse(await psql(`
+      select private.admin_upsert_discount_offer(
+        null,
+        '${partner.id}',
+        'online-outfit-direct',
+        '15% offline',
+        'Publish directly with codes.',
+        '15% off',
+        4500,
+        3825,
+        300,
+        2,
+        null,
+        null,
+        '["Open store","Paste code"]'::jsonb,
+        null,
+        'active',
+        array['DIRECT-ONE', 'DIRECT-TWO']
+      );
+    `));
+    assert.equal(publishedDirect.ok, true);
+    assert.equal(publishedDirect.status, 'active');
+    assert.equal(publishedDirect.codes_inserted, 2);
+    assert.equal(publishedDirect.available_codes, 2);
+
+    const needsCodesOnCreate = JSON.parse(await psql(`
+      select private.admin_upsert_discount_offer(
+        null,
+        '${partner.id}',
+        'online-outfit-empty',
+        'Needs codes',
+        'Cannot publish without codes.',
+        '10% off',
+        4500,
+        4050,
+        200,
+        1,
+        null,
+        null,
+        '["Open store"]'::jsonb,
+        null,
+        'active',
+        array['  ', '']
+      );
+    `));
+    assert.equal(needsCodesOnCreate.ok, false);
+    assert.equal(needsCodesOnCreate.reason, 'needs_codes');
+
+    const codeRowsBeforeDelete = await psql(`
+      select count(*)::text
+      from private.offer_discount_codes
+      where redemption_id = '${redeemed.redemption_id}';
+    `);
+    assert.equal(codeRowsBeforeDelete, '1');
+
+    await psql(`delete from public.redemptions where id = '${redeemed.redemption_id}';`);
+
+    const codeRowsAfterDelete = await psql(`
+      select count(*)::text
+      from private.offer_discount_codes
+      where code = '${redeemed.code}';
+    `);
+    assert.equal(codeRowsAfterDelete, '0');
   } finally {
     await stop();
   }

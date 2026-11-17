@@ -50,7 +50,8 @@ alter table public.offers
   alter column offer_type set default 'venue',
   alter column location_id drop not null;
 -- status default stays active for legacy venue inserts. Discount-code creates
--- always pass status = draft from admin_upsert_discount_offer.
+-- pass draft (save draft) or active (publish directly with codes) from
+-- admin_upsert_discount_offer.
 
 alter table public.offers
   drop constraint offers_status;
@@ -96,7 +97,7 @@ comment on column public.offers.instructions is
   'Ordered JSON string list shown after a successful discount-code redeem.';
 
 comment on column public.offers.status is
-  'draft never published; active live; paused was published then paused; removed hidden.';
+  'draft = saved unpublished; active = live; paused = published then paused; removed = terminal hide.';
 
 create index offers_partner on public.offers (partner_id)
   where partner_id is not null;
@@ -152,7 +153,9 @@ create table private.offer_discount_codes (
   id uuid primary key default gen_random_uuid(),
   offer_id uuid not null references public.offers (id) on delete cascade,
   code text not null,
-  redemption_id uuid unique references public.redemptions (id) on delete set null,
+  -- Cascade deletes the assigned code with its redemption so member/redemption
+  -- deletes succeed and the one-time code is never returned to the unused pool.
+  redemption_id uuid unique references public.redemptions (id) on delete cascade,
   assigned_at timestamptz,
   created_at timestamptz not null default pg_catalog.now(),
   constraint offer_discount_codes_code_present check (
@@ -167,7 +170,7 @@ create table private.offer_discount_codes (
 );
 
 comment on table private.offer_discount_codes is
-  'Admin-uploaded one-time discount codes. Unique across all offers. Assigned at redeem.';
+  'Admin-uploaded one-time discount codes. Unique across all offers. Assigned at redeem. Deleting a redemption deletes the assigned code row (no re-pool).';
 
 create index offer_discount_codes_available
   on private.offer_discount_codes (offer_id)
@@ -602,7 +605,9 @@ create or replace function private.admin_upsert_discount_offer(
   p_starts_at timestamptz,
   p_expires_at timestamptz,
   p_instructions jsonb,
-  p_image_url text
+  p_image_url text,
+  p_status text default 'draft',
+  p_codes text[] default null
 )
 returns jsonb
 language plpgsql
@@ -618,7 +623,12 @@ declare
   v_value_label text := pg_catalog.btrim(coalesce(p_value_label, ''));
   v_image text := nullif(pg_catalog.btrim(coalesce(p_image_url, '')), '');
   v_instructions jsonb := coalesce(p_instructions, '[]'::jsonb);
+  v_status text := coalesce(p_status, 'draft');
   v_existing public.offers%rowtype;
+  v_code text;
+  v_inserted integer := 0;
+  v_seen text[] := array[]::text[];
+  v_constraint text;
 begin
   if p_partner_id is null
     or char_length(v_slug) = 0
@@ -636,6 +646,7 @@ begin
       and p_starts_at >= p_expires_at
     )
     or not private.instructions_are_strings(v_instructions)
+    or v_status not in ('draft', 'active')
   then
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'invalid_payload');
   end if;
@@ -649,6 +660,22 @@ begin
   end if;
 
   if p_offer_id is null then
+    -- Publish-directly requires at least one code in the same create call.
+    if v_status = 'active' then
+      if p_codes is null then
+        return pg_catalog.jsonb_build_object('ok', false, 'reason', 'needs_codes');
+      end if;
+      foreach v_code in array p_codes loop
+        v_code := pg_catalog.btrim(coalesce(v_code, ''));
+        if char_length(v_code) > 0 and not (v_code = any (v_seen)) then
+          v_seen := array_append(v_seen, v_code);
+        end if;
+      end loop;
+      if pg_catalog.cardinality(v_seen) < 1 then
+        return pg_catalog.jsonb_build_object('ok', false, 'reason', 'needs_codes');
+      end if;
+    end if;
+
     insert into public.offers (
       partner_id,
       location_id,
@@ -683,11 +710,36 @@ begin
       v_instructions,
       v_image,
       'discount_code',
-      'draft'
+      v_status
     )
     returning id into v_id;
 
-    return pg_catalog.jsonb_build_object('ok', true, 'id', v_id, 'status', 'draft');
+    if pg_catalog.cardinality(v_seen) > 0 then
+      foreach v_code in array v_seen loop
+        insert into private.offer_discount_codes (offer_id, code)
+        values (v_id, v_code);
+        v_inserted := v_inserted + 1;
+      end loop;
+    elsif p_codes is not null and v_status = 'draft' then
+      foreach v_code in array p_codes loop
+        v_code := pg_catalog.btrim(coalesce(v_code, ''));
+        if char_length(v_code) = 0 or v_code = any (v_seen) then
+          continue;
+        end if;
+        v_seen := array_append(v_seen, v_code);
+        insert into private.offer_discount_codes (offer_id, code)
+        values (v_id, v_code);
+        v_inserted := v_inserted + 1;
+      end loop;
+    end if;
+
+    return pg_catalog.jsonb_build_object(
+      'ok', true,
+      'id', v_id,
+      'status', v_status,
+      'codes_inserted', v_inserted,
+      'available_codes', private.discount_code_available_count(v_id)
+    );
   end if;
 
   select * into v_existing
@@ -703,6 +755,11 @@ begin
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'wrong_offer_type');
   end if;
 
+  if v_existing.status = 'removed' then
+    return pg_catalog.jsonb_build_object('ok', false, 'reason', 'removed_terminal');
+  end if;
+
+  -- Field updates never change status. Use admin_set_discount_offer_status.
   update public.offers
   set
     partner_id = p_partner_id,
@@ -725,6 +782,10 @@ begin
   return pg_catalog.jsonb_build_object('ok', true, 'id', v_id, 'status', v_existing.status);
 exception
   when unique_violation then
+    get stacked diagnostics v_constraint = constraint_name;
+    if v_constraint = 'offer_discount_codes_code_key' then
+      return pg_catalog.jsonb_build_object('ok', false, 'reason', 'duplicate_codes');
+    end if;
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'slug_taken');
 end;
 $$;
@@ -743,7 +804,9 @@ create or replace function public.admin_upsert_discount_offer(
   p_starts_at timestamptz,
   p_expires_at timestamptz,
   p_instructions jsonb,
-  p_image_url text
+  p_image_url text,
+  p_status text default 'draft',
+  p_codes text[] default null
 )
 returns jsonb
 language sql
@@ -764,7 +827,9 @@ as $$
     p_starts_at,
     p_expires_at,
     p_instructions,
-    p_image_url
+    p_image_url,
+    p_status,
+    p_codes
   );
 $$;
 
@@ -780,6 +845,7 @@ as $$
 declare
   v_offer public.offers%rowtype;
   v_available integer;
+  v_allowed boolean := false;
 begin
   if p_status is null or p_status not in ('draft', 'active', 'paused', 'removed') then
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'invalid_payload');
@@ -798,9 +864,30 @@ begin
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'wrong_offer_type');
   end if;
 
-  -- draft means never published; cannot return to draft after leaving it.
-  if p_status = 'draft' and v_offer.status is distinct from 'draft' then
+  if v_offer.status = p_status then
+    return pg_catalog.jsonb_build_object(
+      'ok', true,
+      'id', p_offer_id,
+      'status', p_status,
+      'available_codes', private.discount_code_available_count(p_offer_id)
+    );
+  end if;
+
+  if v_offer.status = 'removed' then
+    return pg_catalog.jsonb_build_object('ok', false, 'reason', 'removed_terminal');
+  end if;
+
+  if p_status = 'draft' then
     return pg_catalog.jsonb_build_object('ok', false, 'reason', 'cannot_draft_after_publish');
+  end if;
+
+  v_allowed :=
+    (v_offer.status = 'draft' and p_status in ('active', 'removed'))
+    or (v_offer.status = 'active' and p_status in ('paused', 'removed'))
+    or (v_offer.status = 'paused' and p_status in ('active', 'removed'));
+
+  if not v_allowed then
+    return pg_catalog.jsonb_build_object('ok', false, 'reason', 'invalid_transition');
   end if;
 
   if p_status = 'active' then
@@ -1143,8 +1230,8 @@ revoke all on function private.redeem_discount_code_offer(uuid, uuid, uuid, bool
 revoke all on function public.redeem_discount_code_offer(uuid, uuid, uuid, boolean) from public, anon, authenticated;
 revoke all on function private.admin_upsert_partner(uuid, text, text, text) from public, anon, authenticated;
 revoke all on function public.admin_upsert_partner(uuid, text, text, text) from public, anon, authenticated;
-revoke all on function private.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text) from public, anon, authenticated;
-revoke all on function public.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text) from public, anon, authenticated;
+revoke all on function private.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text, text, text[]) from public, anon, authenticated;
+revoke all on function public.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text, text, text[]) from public, anon, authenticated;
 revoke all on function private.admin_set_discount_offer_status(uuid, text) from public, anon, authenticated;
 revoke all on function public.admin_set_discount_offer_status(uuid, text) from public, anon, authenticated;
 revoke all on function private.admin_upload_discount_codes(uuid, text[]) from public, anon, authenticated;
@@ -1158,8 +1245,8 @@ grant execute on function private.redeem_discount_code_offer(uuid, uuid, uuid, b
 grant execute on function public.redeem_discount_code_offer(uuid, uuid, uuid, boolean) to service_role;
 grant execute on function private.admin_upsert_partner(uuid, text, text, text) to service_role;
 grant execute on function public.admin_upsert_partner(uuid, text, text, text) to service_role;
-grant execute on function private.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text) to service_role;
-grant execute on function public.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text) to service_role;
+grant execute on function private.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text, text, text[]) to service_role;
+grant execute on function public.admin_upsert_discount_offer(uuid, uuid, text, text, text, text, integer, integer, integer, integer, timestamptz, timestamptz, jsonb, text, text, text[]) to service_role;
 grant execute on function private.admin_set_discount_offer_status(uuid, text) to service_role;
 grant execute on function public.admin_set_discount_offer_status(uuid, text) to service_role;
 grant execute on function private.admin_upload_discount_codes(uuid, text[]) to service_role;
