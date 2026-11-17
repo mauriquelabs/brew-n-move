@@ -150,16 +150,16 @@ export function RewardsScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
-        <AppText role="body" style={styles.intro}>Choose a café treat.</AppText>
+        <AppText role="body" style={styles.intro}>Choose a reward and get a discount code.</AppText>
         <Pressable
           accessibilityRole="button"
           onPress={() => router.push('/my-rewards')}
           style={styles.myRewards}
         >
-          <AppText role="eyebrow">Your vouchers</AppText>
+          <AppText role="eyebrow">Your codes</AppText>
           <AppText role="heading">My rewards</AppText>
           <AppText role="caption" style={styles.myRewardsCopy}>
-            Open a reward you have already used points on.
+            Reopen a discount code you have already unlocked.
           </AppText>
         </Pressable>
 

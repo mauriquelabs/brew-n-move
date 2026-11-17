@@ -1,4 +1,5 @@
 import { supabase } from '../auth/supabase';
+import { parseInstructions } from '../rewards/offers';
 
 export type RedeemReason =
   | 'budget_exhausted'
@@ -14,15 +15,19 @@ export type RedeemReason =
   | 'outside_geofence'
   | 'redeemed'
   | 'sold_out'
-  | 'unavailable';
+  | 'unavailable'
+  | 'wrong_offer_type';
 
 export type RedeemConfirmation = {
-  location: string;
+  discountCode: string | null;
+  instructions: string[];
+  location: string | null;
   offerId: string;
   partner: string;
   pointsSpent: number;
   redeemedAt: string;
   redemptionId: string;
+  storeUrl: string | null;
   tillConfirmedAt: string | null;
   title: string;
   valueLabel: string;
@@ -49,6 +54,7 @@ const confirmedReasons = new Set<RedeemReason>([
   'outside_geofence',
   'redeemed',
   'sold_out',
+  'wrong_offer_type',
 ]);
 
 function unconfirmed(): RedeemResponse {
@@ -60,19 +66,24 @@ function unconfirmed(): RedeemResponse {
   };
 }
 
+function optionalText(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function confirmationFrom(payload: Record<string, unknown>): RedeemConfirmation | null {
-  const location = payload.location;
-  const offerId = payload.offerId;
-  const partner = payload.partner;
-  const pointsSpent = payload.pointsSpent ?? payload.pointsCost;
-  const redeemedAt = payload.redeemedAt;
-  const redemptionId = payload.redemptionId;
-  const tillConfirmedAt = payload.tillConfirmedAt;
-  const title = payload.title;
-  const valueLabel = payload.valueLabel;
+  const offerId = payload.offerId ?? payload.offer_id;
+  const partner = payload.partner ?? payload.partner_name;
+  const pointsSpent = payload.pointsSpent ?? payload.points_spent ?? payload.pointsCost ?? payload.points_cost;
+  const redeemedAt = payload.redeemedAt ?? payload.redeemed_at;
+  const redemptionId = payload.redemptionId ?? payload.redemption_id;
+  const title = payload.title ?? payload.offer_title;
+  const valueLabel = payload.valueLabel ?? payload.value_label;
   if (
-    typeof location !== 'string'
-    || typeof offerId !== 'string'
+    typeof offerId !== 'string'
     || typeof partner !== 'string'
     || typeof pointsSpent !== 'number'
     || typeof redeemedAt !== 'string'
@@ -83,16 +94,63 @@ function confirmationFrom(payload: Record<string, unknown>): RedeemConfirmation 
     return null;
   }
 
+  const tillConfirmedAt = payload.tillConfirmedAt ?? payload.till_confirmed_at;
+  const location = payload.location ?? payload.location_name;
+  // DB RPC uses `code`; admin Edge contract uses `discountCode` / `discount_code`.
+  const discountCode = optionalText(
+    payload.discountCode
+    ?? payload.discount_code
+    ?? payload.code
+    ?? payload.fulfillment_code
+    ?? payload.fulfillmentCode,
+  );
+  const storeUrl = optionalText(payload.storeUrl ?? payload.store_url);
+  const instructions = parseInstructions(payload.instructions);
+
   return {
-    location,
+    discountCode,
+    instructions,
+    location: optionalText(location),
     offerId,
     partner,
     pointsSpent,
     redeemedAt,
     redemptionId,
+    storeUrl,
     tillConfirmedAt: typeof tillConfirmedAt === 'string' ? tillConfirmedAt : null,
     title,
     valueLabel,
+  };
+}
+
+function mapRedemptionRow(row: {
+  fulfillment_code?: string | null;
+  discount_code?: string | null;
+  id: string;
+  instructions?: string[] | string | null;
+  location_name: string | null;
+  offer_id: string;
+  offer_title: string;
+  partner_name: string;
+  points_spent: number;
+  redeemed_at: string;
+  store_url?: string | null;
+  till_confirmed_at: string | null;
+  value_label: string;
+}): RedeemConfirmation {
+  return {
+    discountCode: optionalText(row.fulfillment_code ?? row.discount_code),
+    instructions: parseInstructions(row.instructions),
+    location: optionalText(row.location_name),
+    offerId: row.offer_id,
+    partner: row.partner_name || 'Partner',
+    pointsSpent: row.points_spent,
+    redeemedAt: row.redeemed_at,
+    redemptionId: row.id,
+    storeUrl: optionalText(row.store_url),
+    tillConfirmedAt: row.till_confirmed_at,
+    title: row.offer_title,
+    valueLabel: row.value_label,
   };
 }
 
@@ -164,72 +222,57 @@ async function postRedeem(body: Record<string, unknown>): Promise<RedeemResponse
 export function lookupVoucher(redemptionId: string) {
   return supabase
     .from('redemptions')
-    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at')
+    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, fulfillment_code, store_url, instructions')
     .eq('id', redemptionId)
     .maybeSingle()
-    .then(({ data, error }) => {
-      if (error || !data) {
+    .then(async ({ data, error }) => {
+      if (!error && data) {
+        return mapRedemptionRow(data);
+      }
+
+      const legacy = await supabase
+        .from('redemptions')
+        .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at')
+        .eq('id', redemptionId)
+        .maybeSingle();
+      if (legacy.error || !legacy.data) {
         return null;
       }
-      return {
-        location: data.location_name as string,
-        offerId: data.offer_id as string,
-        partner: data.partner_name as string,
-        pointsSpent: data.points_spent as number,
-        redeemedAt: data.redeemed_at as string,
-        redemptionId: data.id as string,
-        tillConfirmedAt: (data.till_confirmed_at as string | null) ?? null,
-        title: data.offer_title as string,
-        valueLabel: data.value_label as string,
-      } satisfies RedeemConfirmation;
+      return mapRedemptionRow(legacy.data);
     });
 }
 
 export function listMyRewards() {
   return supabase
     .from('redemptions')
-    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at')
+    .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at, fulfillment_code, store_url, instructions')
     .order('redeemed_at', { ascending: false })
-    .then(({ data, error }) => {
-      if (error || !data) {
+    .then(async ({ data, error }) => {
+      if (!error && data) {
+        return data.map(mapRedemptionRow);
+      }
+
+      const legacy = await supabase
+        .from('redemptions')
+        .select('id, offer_id, partner_name, location_name, offer_title, value_label, points_spent, redeemed_at, till_confirmed_at')
+        .order('redeemed_at', { ascending: false });
+      if (legacy.error || !legacy.data) {
         return null;
       }
-      return data
-        .map((row) => ({
-          location: row.location_name as string,
-          offerId: row.offer_id as string,
-          partner: row.partner_name as string,
-          pointsSpent: row.points_spent as number,
-          redeemedAt: row.redeemed_at as string,
-          redemptionId: row.id as string,
-          tillConfirmedAt: (row.till_confirmed_at as string | null) ?? null,
-          title: row.offer_title as string,
-          valueLabel: row.value_label as string,
-        } satisfies RedeemConfirmation))
-        .sort((left, right) => Number(Boolean(left.tillConfirmedAt)) - Number(Boolean(right.tillConfirmedAt)));
+      return legacy.data.map(mapRedemptionRow);
     });
 }
 
-export function submitExchange(body: { commit: boolean; offerId: string; requestId?: string }) {
+export function submitGetCode(body: { commit: boolean; offerId: string; requestId?: string }) {
   return postRedeem({
-    action: 'exchange',
+    action: 'get-code',
     commit: body.commit,
     offerId: body.offerId,
     requestId: body.requestId,
   });
 }
 
-export function submitTill(body: {
-  latitude: number;
-  longitude: number;
-  redemptionId: string;
-  requestId?: string;
-}) {
-  return postRedeem({
-    action: 'till',
-    latitude: body.latitude,
-    longitude: body.longitude,
-    redemptionId: body.redemptionId,
-    requestId: body.requestId,
-  });
+/** @deprecated Café exchange path is paused; use submitGetCode for live offers. */
+export function submitExchange(body: { commit: boolean; offerId: string; requestId?: string }) {
+  return submitGetCode(body);
 }
