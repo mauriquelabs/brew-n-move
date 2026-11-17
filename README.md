@@ -14,6 +14,7 @@ Member and admin apps share one Supabase project.
 | `apps/admin`  | Internal admin app. Vite, React, and TypeScript.            |
 | `supabase`    | Postgres, auth, authorization policies, and Edge Functions. |
 | `solana`      | Devnet rewards ledger.                                      |
+| `docs`        | Product and schema documentation, including the [database model](docs/database-model.md). |
 
 The app opens without an account. Guests can connect Apple Health or Health Connect, view today’s step total, and browse offers. Validating steps and redemption require a signed-in member who has finished onboarding. The demo signs in with email and password. Validation, rewards data, and redemption are not built yet.
 
